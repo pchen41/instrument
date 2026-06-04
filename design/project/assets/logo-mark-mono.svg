@@ -1,0 +1,9 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Instrument">
+  <rect width="64" height="64" rx="16" fill="currentColor"></rect>
+  <g fill="#F7F4EE">
+    <rect x="16" y="30" width="6" height="18" rx="3"></rect>
+    <rect x="26" y="22" width="6" height="26" rx="3"></rect>
+    <rect x="36" y="16" width="6" height="32" rx="3"></rect>
+    <rect x="46" y="26" width="6" height="22" rx="3"></rect>
+  </g>
+</svg>

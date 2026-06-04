@@ -1,0 +1,163 @@
+/* ============================================================================
+   INSTRUMENT — Colors & Type
+   The design foundations for Instrument, an AI SRE for observability and
+   incident response. Theme: "calm instrumentation" — warm paper, a balanced
+   pine-teal primary, and a calm state palette that informs without alarming.
+
+   Fonts are loaded from Google Fonts (see @import below). If you self-host,
+   drop the files in /fonts and swap the @import for @font-face.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap');
+
+/* Icons: this system ships a self-contained inline-SVG set, not an icon-font.
+   Load assets/icons.js and use <i class="ic" data-icon="bell"></i> (plain HTML)
+   or window.Instrument.iconHTML('bell') / <Icon name="bell"/> (React).
+   See README.md › Iconography. */
+
+:root {
+  /* ---------------------------------------------------------------------- */
+  /* TYPEFACES                                                              */
+  /* ---------------------------------------------------------------------- */
+  --font-sans: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'Cascadia Code', monospace;
+
+  /* ---------------------------------------------------------------------- */
+  /* WARM NEUTRAL RAMP  (hue ~80, low chroma — "paper")                     */
+  /* ---------------------------------------------------------------------- */
+  --paper:        #F7F4EE;  /* app canvas — warm paper                      */
+  --paper-deep:   #F1ECE2;  /* alternating / sunken canvas                  */
+  --surface:      #FFFFFF;  /* cards, panels                                */
+  --surface-2:    #FBF9F4;  /* subtle raised surface on paper               */
+  --sunken:       #EFEAE0;  /* inset wells, code blocks, track              */
+
+  --border-faint: #ECE6DB;  /* hairline dividers inside surfaces            */
+  --border:       #E0D9CC;  /* default card / control border                */
+  --border-strong:#CFC7B6;  /* emphasized border, focus ring base           */
+
+  --ink:          #26241F;  /* primary text — warm charcoal                 */
+  --ink-2:        #5C584F;  /* secondary text                               */
+  --ink-3:        #8A8478;  /* muted text, captions                         */
+  --ink-4:        #B3AC9E;  /* placeholder, disabled, faint icons           */
+
+  /* ---------------------------------------------------------------------- */
+  /* BRAND — Pine / Teal  ("systems in tune")                               */
+  /* ---------------------------------------------------------------------- */
+  --brand-50:   #E9F3F1;
+  --brand-100:  #D2E8E3;
+  --brand-200:  #A6D2C8;
+  --brand-300:  #6FB7A8;
+  --brand-400:  #3E9787;
+  --brand-500:  #1A8676;
+  --brand-600:  #0F766E;   /* PRIMARY                                       */
+  --brand-700:  #0B5F58;   /* hover / pressed                               */
+  --brand-800:  #094B45;
+  --brand-900:  #07332F;   /* text on tint, deep accents                    */
+  --brand-tint: #E9F3F1;   /* alias: subtle brand wash                      */
+
+  /* On-brand peak indicator (used on the mark + active states)            */
+  --signal: #7FD1C1;
+
+  /* ---------------------------------------------------------------------- */
+  /* SEMANTIC / STATE  (calm, desaturated — never neon)                     */
+  /* ---------------------------------------------------------------------- */
+  --ok:          #2E9E6B;  /* healthy / resolved                            */
+  --ok-tint:     #E4F3EC;
+  --ok-ink:      #1C6B47;
+
+  --info:        #3B82C4;  /* investigating / neutral                       */
+  --info-tint:   #E6F0F8;
+  --info-ink:    #285C8C;
+
+  --warn:        #C8901F;  /* warning / tuning / relayed source warning      */
+  --warn-tint:   #F7EEDA;
+  --warn-ink:    #8A6210;
+
+  --crit:        #C9534A;  /* firing alert / critical / destructive         */
+  --crit-tint:   #F7E6E3;
+  --crit-ink:    #973B33;
+
+  /* ---------------------------------------------------------------------- */
+  /* RADII                                                                  */
+  /* ---------------------------------------------------------------------- */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 10px;   /* buttons, inputs                                        */
+  --r-lg: 14px;   /* cards, panels                                          */
+  --r-xl: 20px;   /* feature surfaces, modals                              */
+  --r-pill: 999px;
+
+  /* ---------------------------------------------------------------------- */
+  /* SPACING  (4px base)                                                    */
+  /* ---------------------------------------------------------------------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+  --s-16: 64px;
+
+  /* ---------------------------------------------------------------------- */
+  /* SHADOWS  (warm-tinted, low, soft — calming elevation)                  */
+  /* ---------------------------------------------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(38,36,31,0.05);
+  --shadow-sm: 0 1px 2px rgba(38,36,31,0.04), 0 2px 4px rgba(38,36,31,0.05);
+  --shadow-md: 0 2px 4px rgba(38,36,31,0.04), 0 6px 16px rgba(38,36,31,0.07);
+  --shadow-lg: 0 4px 8px rgba(38,36,31,0.05), 0 16px 40px rgba(38,36,31,0.10);
+  --ring: 0 0 0 3px rgba(15,118,110,0.18);   /* focus ring (brand)         */
+
+  /* ---------------------------------------------------------------------- */
+  /* MOTION  (gentle — no bounce; calm easing)                              */
+  /* ---------------------------------------------------------------------- */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 360ms;
+
+  /* ---------------------------------------------------------------------- */
+  /* TYPE SCALE  (semantic — apply directly or via classes below)          */
+  /* ---------------------------------------------------------------------- */
+  --display:    700 48px/1.05 var(--font-sans);
+  --h1:         700 34px/1.12 var(--font-sans);
+  --h2:         650 26px/1.18 var(--font-sans);
+  --h3:         600 20px/1.3  var(--font-sans);
+  --h4:         600 16px/1.35 var(--font-sans);
+  --body-lg:    400 17px/1.6  var(--font-sans);
+  --body:       400 15px/1.55 var(--font-sans);
+  --small:      450 13px/1.5  var(--font-sans);
+  --caption:    600 11px/1.4  var(--font-sans);  /* uppercase + tracking   */
+  --code:       450 13.5px/1.6 var(--font-mono);
+}
+
+/* ============================================================================
+   SEMANTIC ELEMENT DEFAULTS  (optional — include this file and these apply)
+   ========================================================================== */
+.is-instrument {
+  font: var(--body);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.display { font: var(--display); letter-spacing: -0.025em; color: var(--ink); }
+.h1 { font: var(--h1); letter-spacing: -0.02em; color: var(--ink); }
+.h2 { font: var(--h2); letter-spacing: -0.015em; color: var(--ink); }
+.h3 { font: var(--h3); letter-spacing: -0.01em; color: var(--ink); }
+.h4 { font: var(--h4); color: var(--ink); }
+.body-lg { font: var(--body-lg); color: var(--ink-2); }
+.body { font: var(--body); color: var(--ink); }
+.small { font: var(--small); color: var(--ink-2); }
+.caption {
+  font: var(--caption);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+.mono, code, kbd, samp { font: var(--code); }
+.num { font-variant-numeric: tabular-nums; }
