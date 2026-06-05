@@ -1,12 +1,66 @@
 /* Incidents: list, investigation detail */
 
+/* Investigation-start policy options. Copy is honest about the boundary:
+   investigations only ever read; a fix is never generated automatically. */
+const AUTO_MODES = [
+  { id: 'manual', short: 'Manual', label: 'Manual',
+    desc: 'Every investigation waits for you to press Investigate.' },
+  { id: 'auto', short: 'Automatic', label: 'Automatic',
+    desc: 'Instrument starts investigating every firing alert the moment it arrives.' },
+  { id: 'smart', short: 'Instrument decides', label: 'Let Instrument decide', spark: true,
+    desc: 'Instrument starts on its own for clear-cut alerts, and waits for you when the cause looks ambiguous.' },
+];
+
+function AutoInvestigateMenu({ mode, onSet }) {
+  const [open, setOpen] = React.useState(false);
+  const cur = AUTO_MODES.find(m => m.id === mode) || AUTO_MODES[0];
+  return (
+    <div className="ai-menu-wrap">
+      <button className={'btn btn-secondary btn-sm ai-trigger' + (open ? ' on' : '')} onClick={() => setOpen(o => !o)} title="Investigation start">
+        <window.Icon name="search" />
+        <span className="ai-trigger-label">{cur.short}</span>
+        <window.Icon name="chevron-down" className="ai-caret" />
+      </button>
+      {open && (
+        <React.Fragment>
+          <div className="menu-catch" onClick={() => setOpen(false)}></div>
+          <div className="ai-pop" role="menu">
+            <div className="ai-pop-head">Investigation start</div>
+            <p className="ai-pop-sub">When an alert fires, decide whether Instrument waits for you or starts looking on its own. Investigations only read your systems — a fix is never generated automatically.</p>
+            <div className="ai-opts">
+              {AUTO_MODES.map(m => {
+                const on = m.id === mode;
+                return (
+                  <button key={m.id} className={'ai-opt' + (on ? ' on' : '')} onClick={() => { onSet(m.id); setOpen(false); }} role="menuitemradio" aria-checked={on}>
+                    <span className={'ai-radio' + (on ? ' on' : '')}></span>
+                    <span className="ai-opt-body">
+                      <span className="ai-opt-label">{m.label}{m.spark && <window.Icon name="sparkle" className="ai-opt-spark" />}</span>
+                      <span className="ai-opt-desc">{m.desc}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+/* Marks an investigation that began without a human, per the start policy.
+   Sparkle = Instrument authored the action, paired with words (never an emoji). */
+function AutoBadge() {
+  return <span className="auto-chip"><window.Icon name="sparkle" />Started automatically</span>;
+}
+
 function rootTitle(inc) {
   // Honest labeling: only call it a "root cause" when confidence is high;
   // otherwise it's still the leading hypothesis.
   return inc.confWord === 'High' ? 'Root cause' : 'Leading hypothesis';
 }
 
-function IncidentRow({ inc, inv, onOpen, onInvestigate }) {
+function IncidentRow({ inc, inv, auto, onOpen, onInvestigate }) {
   const { Pill, Activity, Confidence, ConfirmDialog, RULE_COLOR } = window;
   const [confirm, setConfirm] = React.useState(false);
   const lead = inc.hypotheses && inc.hypotheses[0];
@@ -18,6 +72,7 @@ function IncidentRow({ inc, inv, onOpen, onInvestigate }) {
       <div className="ibody">
         <div className="itop">
           {resolved ? <Pill alert={inc.alert} /> : <Activity kind={inv} />}
+          {auto && inv !== 'new' && <AutoBadge />}
           <span className="itime">{inc.source} · {inc.started}</span>
         </div>
         <h3>{inc.title}</h3>
@@ -64,19 +119,19 @@ function IncidentRow({ inc, inv, onOpen, onInvestigate }) {
   );
 }
 
-function IncidentList({ invStates, onOpen, onInvestigate }) {
+function IncidentList({ invStates, autoStarted, autoMode, onSetAutoMode, onOpen, onInvestigate }) {
   const [tab, setTab] = React.useState('active');
   const list = window.INCIDENTS.filter(i => tab === 'active' ? i.state === 'active' : i.state === 'resolved');
-  const serviceCount = new Set(window.INCIDENTS.map(i => i.service)).size;
   const sourceCount = window.SOURCES.filter(s => s.connected).length;
   return (
     <div className="content narrow">
       <div className="page-head">
         <div>
           <h1>Incidents</h1>
-          <div className="sub">Instrument is watching {serviceCount} services across {sourceCount} connected sources.</div>
+          <div className="sub">Instrument is watching every connected service across {sourceCount} sources.</div>
         </div>
-        <div style={{ marginLeft: 'auto' }}>
+        <div className="head-controls">
+          <AutoInvestigateMenu mode={autoMode} onSet={onSetAutoMode} />
           <div className="seg">
             <button className={tab === 'active' ? 'on' : ''} onClick={() => setTab('active')}><window.Icon name="signal" />Active</button>
             <button className={tab === 'resolved' ? 'on' : ''} onClick={() => setTab('resolved')}><window.Icon name="check-circle" />Resolved</button>
@@ -85,7 +140,7 @@ function IncidentList({ invStates, onOpen, onInvestigate }) {
       </div>
       {list.length ? (
         <div className="inc-list">
-          {list.map(inc => <IncidentRow key={inc.id} inc={inc} inv={invStates[inc.id]} onOpen={onOpen} onInvestigate={onInvestigate} />)}
+          {list.map(inc => <IncidentRow key={inc.id} inc={inc} inv={invStates[inc.id]} auto={autoStarted[inc.id]} onOpen={onOpen} onInvestigate={onInvestigate} />)}
         </div>
       ) : (
         <div className="empty">
@@ -98,7 +153,7 @@ function IncidentList({ invStates, onOpen, onInvestigate }) {
   );
 }
 
-function Investigation({ inc, inv, invProg, fixState, onBack, onGenerateFix, onOpenFixProgress, onOpenFixResult }) {
+function Investigation({ inc, inv, invProg, auto, fixState, onBack, onGenerateFix, onOpenFixProgress, onOpenFixResult }) {
   const { Pill, Activity, Confidence, ConfirmDialog } = window;
   const [confirm, setConfirm] = React.useState(false);
   const resolved = inc.state === 'resolved';
@@ -115,6 +170,7 @@ function Investigation({ inc, inv, invProg, fixState, onBack, onGenerateFix, onO
           <div className="card rca">
             <div style={{ display: 'flex', alignItems: 'center', gap: '9px', marginBottom: '12px' }}>
               {resolved ? <Pill alert={inc.alert} /> : <Activity kind={inv} />}
+              {auto && inv !== 'new' && <AutoBadge />}
               <span className="mono" style={{ fontSize: '12px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{inc.source}</span>
             </div>
             <h2>{inc.title}</h2>

@@ -47,6 +47,37 @@ const INCIDENTS = [
     fix: { title: 'Revert connection-pool size to 50', branch: 'instrument/fix-inc-482', number: 3127, files: ['db/pool.ts'], desc: 'Restores maxConnections to 50 in db/pool.ts, reverting the change from PR #3120 that triggered pool exhaustion. Latency should return to baseline within a minute of deploy.' },
   },
   {
+    /* Auto-started example: this investigation began on its own because the
+       account's investigation-start policy is set to automatic / let-Instrument-
+       decide. It carries `auto: true` so the row and detail show it was started
+       without a human. It's still a read-only investigation — no fix is ever
+       generated automatically. */
+    id: 'INC-487',
+    alert: 'firing', state: 'active', inv0: 'investigating', auto: true,
+    title: 'Error rate climbing on checkout-web',
+    service: 'checkout-web',
+    desc: '5xx on the checkout page rose to 4.5% right after a deploy, and the rate is still climbing.',
+    started: '2m ago',
+    confWord: 'Likely',
+    source: 'Datadog monitor',
+    metrics: [
+      { k: '5xx rate', v: '4.5%' },
+      { k: 'baseline', v: '0.3%' },
+      { k: 'time to detect', v: '0m 41s' },
+      { k: 'deploy', v: 'b7e2' },
+    ],
+    hypotheses: [
+      { lead: true, t: 'Feature-flag default flipped on in deploy b7e2', d: 'A flag added in b7e2 defaults on and calls an endpoint that returns 5xx. The error onset lines up with the rollout — Instrument is confirming the correlation now.' },
+      { lead: false, t: 'Edge cache-miss storm', d: 'CDN hit rate dipped briefly around the same time. Being checked.' },
+    ],
+    timeline: [
+      { kind: 'crit', time: '14:33:20', title: 'Datadog monitor fired', desc: '5xx on checkout-web crossed 2%.' },
+      { kind: 'act', time: '14:33:31', title: 'Instrument started investigating automatically', desc: 'Investigation start is set to automatic, so Instrument began correlating the deploy, traces, and error logs on its own — without waiting for a human.' },
+    ],
+    diff: null,
+    fix: null,
+  },
+  {
     id: 'INC-484',
     alert: 'firing', state: 'active', inv0: 'complete',
     title: 'Image uploads timing out',

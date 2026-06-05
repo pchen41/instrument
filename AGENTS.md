@@ -18,5 +18,3 @@ codex exec --skip-git-repo-check "prompt"
 
 gemini:
 agy -p "prompt"
-
-When working on a task, get feedback when deciding on approach from claude, codex and gemini and also get code reviewed by them after finishing implementation. You can ignore feedback if you disagree with it. Ask the user when you're not sure.

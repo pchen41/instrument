@@ -26,9 +26,8 @@ The design reference is in `design/README.md` and the console prototype is under
 
 - Instrument will not replace Datadog as the source of truth for monitor state, alert state, logs, metrics, or traces.
 - Instrument will not replace GitHub as the source of truth for code, commits, pull requests, branches, comments, or review state.
-- Instrument will not guarantee a single definitive root cause for every incident. It should present ranked hypotheses with evidence and confidence.
+- Instrument will not guarantee a single definitive root cause for every incident. It should present ranked hypotheses with evidence and confidence. Single hypothesis is OK if multiple hypotheses do not exist.
 - MVP will not automatically merge code, apply production monitor changes, or mutate customer systems without explicit human approval, except for posting scoped GitHub PR review comments as part of the PR observability review workflow.
-- MVP will not implement the full database ERD in this PRD. An ERD will be created separately.
 
 ## 4. Users and Personas
 
@@ -56,7 +55,7 @@ Instrument uses GitHub to:
 - Track whether generated or suggested PRs are opened, merged, closed, or stale.
 - Stretch: create branches and pull requests for approved observability improvements or incident fixes.
 
-GitHub write actions must be explicit and auditable. Posting inline PR review comments is automatic for the PR review workflow. Creating branches and PRs is stretch functionality and must be gated by user approval.
+GitHub write actions must be explicit. Posting inline PR review comments is automatic for the PR review workflow. Creating branches and PRs is stretch functionality and must be gated by user approval.
 
 ### 5.2 Datadog
 
@@ -76,7 +75,6 @@ Instrument uses TrueFoundry to:
 
 - Read MCP and LLM-related logs.
 - Correlate AI application failures, degraded model calls, tool failures, latency, and cost anomalies with incidents and recommendations.
-- Surface TrueFoundry as a connected source in the console.
 
 TrueFoundry is an observability signal source, not the primary incident source for MVP unless explicitly configured later. Incident correlation should use available service names, trace IDs, request IDs, deployment timestamps, model names, tool names, and time windows from the incident.
 
@@ -105,7 +103,7 @@ Requirements:
 
 ### 6.2 Proactive Observability Recommendations
 
-Instrument scans connected repositories and observability data to find gaps before they become incidents. MVP should support both a manual scan trigger and a scheduled scan. The initial scheduled cadence may be implementation-defined, but scan results must record the repository/service scope, trigger source, start time, completion time, and whether the result is stale.
+Instrument scans connected repositories and observability data to find gaps before they become incidents. MVP should support both a manual scan trigger and a automatic scan. The initial automatic scan trigger/cadence may be implementation-defined, but scan results must record the repository/service scope, trigger source, start time, completion time, and whether the result is stale.
 
 Examples:
 
@@ -138,7 +136,6 @@ Examples:
 - A service emits an important metric, but no monitor exists.
 - A monitor threshold is too sensitive and creates alert fatigue.
 - A monitor lacks tags, ownership, service scope, notification routing, or a runbook.
-- A metric was added by a recent recommendation and should now receive an alert.
 
 Requirements:
 
@@ -158,7 +155,6 @@ Investigation inputs include:
 - Datadog logs, traces, metrics, service tags, and dashboards.
 - GitHub commits, pull requests, files, diffs, and recent deploy-related changes.
 - TrueFoundry MCP/LLM logs when relevant.
-- Previous recommendations or related incidents.
 
 Requirements:
 
@@ -166,16 +162,15 @@ Requirements:
 - **INC-2**: Incident grouping must avoid one Datadog alert storm creating many duplicate incidents. Before root cause is known, grouping should use monitor ID, service, environment, alert scope/tags, alert transition, and a bounded time window.
 - **INC-3**: An incident must track alert state, incident state, service, title, description, source, start time, key signals, investigation state, timeline, and evidence.
 - **INC-4**: Investigation display states must include `new`, `investigating`, `complete`, and `failed`. These display states are derived from the durable job state: no job maps to `new`, `queued`/`running`/`retrying` maps to `investigating`, `succeeded` maps to `complete`, and terminal `failed` maps to `failed`.
-- **INC-5**: Investigation output must present ranked hypotheses, not only a single answer.
+- **INC-5**: Investigation output must present ranked hypotheses when appropriate. If there is very obviously a root cause, multiple hypothesis are not necessary.
 - **INC-6**: A hypothesis must include evidence references, confidence, and reasoning.
 - **INC-7**: Confidence levels must use stable bands: `High`, `Likely`, and `Low`. The UI may label the leading hypothesis as `Root cause` only for `High`; otherwise it should label it as `Leading hypothesis`.
 - **INC-8**: If the root cause is outside the codebase or not fixable by Instrument, the investigation must explain why no code fix can be generated and suggest a next step.
 - **INC-9**: Resolved incidents must remain visible in a resolved/archive view with their final findings.
-- **INC-10**: Users must be able to rerun an investigation when new commits, logs, traces, metrics, or alert state changes may affect the finding. Reruns create a new durable job linked to the same incident and retain prior findings in history.
 
 ### 6.5 Web Console
 
-The console must match the intent of the design files and provide a polished, reliable product experience.
+The console must match the intent of the design files and provide a polished, reliable product experience. Exact content can deviate where appropriate, e.g. the exact signals shown in the incident investigation. UX can deviate to meet requirements in the PRD that don't have a UI in the design files (e.g. we need a new button or banner somewhere to satisfy a requirement). Please document any deviations.
 
 Required views:
 
@@ -217,7 +212,6 @@ Requirements:
 - **JOB-5**: Jobs must be idempotent where practical, especially for webhook handling, PR comments, and generated recommendations.
 - **JOB-6**: Jobs must record enough audit information to explain what sources were consulted and what actions were taken.
 - **JOB-7**: The UI must be able to resume displaying a job from persisted state without re-running the job.
-- **JOB-8**: Jobs must record source data versions or timestamps where available so refresh and rerun behavior can distinguish fresh server state from new analysis.
 
 ## 8. Evidence, Confidence, and AI Output Requirements
 
@@ -239,12 +233,10 @@ Requirements:
 
 - **SEC-1**: Integration credentials must be stored securely and must not be logged in raw form.
 - **SEC-2**: Instrument must request the least practical permissions for GitHub, Datadog, and TrueFoundry.
-- **SEC-3**: External write actions must be auditable, including actor, timestamp, target system, action type, and payload summary.
-- **SEC-4**: Human approval must be required before applying monitor changes, generating stretch PRs, or generating incident fix PRs.
-- **SEC-5**: Posted PR comments must be traceable back to the Instrument analysis that produced them.
-- **SEC-6**: Users must be able to see when an integration is disconnected, degraded, or missing required permissions.
-- **SEC-7**: Inbound Datadog webhooks must be authenticated or signature-verified before they can create or update incidents.
-- **SEC-8**: The console must require authenticated users and must scope visible repositories, incidents, recommendations, jobs, and integrations to the user's organization or workspace.
+- **SEC-3**: Human approval must be required before applying monitor changes, generating PRs, or generating incident fix PRs.
+- **SEC-4**: Users must be able to see when an integration is disconnected, degraded, or missing required permissions.
+- **SEC-5**: Inbound Datadog webhooks must be authenticated or signature-verified before they can create or update incidents.
+- **SEC-6**: The console must require authenticated users and must scope visible repositories, incidents, recommendations, jobs, and integrations to the user's organization or workspace.
 
 ## 10. Notifications and Refresh Behavior
 
@@ -253,9 +245,8 @@ Requirements:
 - **NOTIFY-1**: When a new incident arrives while a user is on an incident list page, the console must show that new content is available and offer a refresh action.
 - **NOTIFY-2**: When recommendations are added, changed, accepted, dismissed, or outdated while a user is on the recommendations page, the console must show that content changed and offer a refresh action.
 - **NOTIFY-3**: In-console notifications must be debounced to avoid noisy repeated prompts during alert storms or batch scans.
-- **NOTIFY-4**: Refreshing the current view must fetch server state and must not clear in-progress job state.
-- **NOTIFY-5**: The PRD does not require external notifications such as Slack, email, or PagerDuty for MVP.
-- **NOTIFY-6**: The implementation may use polling, realtime events, or version stamps for change detection, but the server must expose enough version information for the console to know when its current view is stale.
+- **NOTIFY-4**: The PRD does not require external notifications such as Slack, email, or PagerDuty for MVP.
+- **NOTIFY-5**: The implementation may use polling, realtime events, or version stamps for change detection, but the server must expose enough version information for the console to know when its current view is stale.
 
 ## 11. MVP Scope
 
@@ -279,10 +270,6 @@ Stretch functionality includes:
 - Generate GitHub PRs for approved observability improvement recommendations.
 - Generate GitHub PRs for incident fixes after an investigation produces a fixable root-cause hypothesis.
 - Apply approved Datadog monitor changes from the console.
-- More advanced feedback loops where accepted/dismissed recommendations influence future ranking.
-- External notifications to Slack, PagerDuty, or email.
-
-Stretch functionality must preserve human approval, auditability, and evidence requirements. Generated PRs must show a preview before creation, identify target repository and branch, cite the evidence that motivated the change, report any checks run, and track whether the PR is open, merged, closed, or stale.
 
 ## 13. Acceptance Criteria
 
@@ -329,6 +316,8 @@ Stretch functionality must preserve human approval, auditability, and evidence r
 
 ## 14. Open Questions
 
-- What deployment signal should Instrument use first when correlating incidents with recent code changes: GitHub commit history, deployment events from Datadog, or another source?
+- What deployment signal should Instrument use first when correlating incidents with recent code changes: GitHub commit history, deployment events from Datadog, or another source? Answer: Github commit history
 - Which Datadog data scopes are required for the first implementation: monitors only, or monitors plus logs, metrics, traces, and dashboards?
+Answer: Monitors, logs, metrics for now
 - How should users configure service ownership, criticality, and notification routing for recommendations and incidents?
+Answer: That would be configured a read from DataDog if it exists. If not, don't use this info.

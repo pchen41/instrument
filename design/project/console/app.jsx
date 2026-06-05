@@ -20,9 +20,24 @@ const FIX_PHASES = [
 // keeps showing the live state; it sits actively correlating, the calm middle.
 const SEED_INV_ACTIVE = 3;
 
+// Investigation-start policy. Investigations only ever READ — they pull traces,
+// deploys, and logs and correlate them. A fix is never generated automatically
+// regardless of this setting; that stays human-initiated. Modes:
+//   'manual' — every investigation waits for a human to press Investigate (default).
+//   'auto'   — Instrument starts investigating every firing alert as it arrives.
+//   'smart'  — Instrument starts on its own for clear-cut alerts, and waits for a
+//              human when the situation looks ambiguous.
 function App() {
   const [view, setView] = React.useState('incidents');
   const [openInc, setOpenInc] = React.useState(null);     // investigation
+  const [autoMode, setAutoMode] = React.useState('manual');
+  // Which incidents were started without a human (seeded from `auto`, plus any
+  // the policy kicks off this session). Drives the "Started automatically" badge.
+  const [autoStarted, setAutoStarted] = React.useState(() => {
+    const m = {};
+    window.INCIDENTS.forEach(i => { if (i.auto) m[i.id] = true; });
+    return m;
+  });
 
   // Investigation lifecycle, per incident: 'new' | 'investigating' | 'complete'.
   // Investigations never start on their own — active incidents arrive as 'new'
@@ -94,6 +109,24 @@ function App() {
     );
   };
 
+  // Apply a policy choice: set the mode, then auto-start eligible incidents that
+  // are still waiting on a human. 'manual' never starts anything; in-flight
+  // investigations are left alone. 'smart' only acts on clear-cut alerts (here,
+  // ones Instrument can already correlate to a recent change with high signal),
+  // and leaves ambiguous ones for a human — Instrument never pretends certainty.
+  const applyAutoMode = mode => {
+    setAutoMode(mode);
+    if (mode === 'manual') return;
+    window.INCIDENTS.forEach(inc => {
+      if (inc.state !== 'active' || invStates[inc.id] !== 'new') return;
+      const clearCut = inc.confWord === 'High';
+      if (mode === 'auto' || (mode === 'smart' && clearCut)) {
+        setAutoStarted(s => ({ ...s, [inc.id]: true }));
+        investigate(inc);
+      }
+    });
+  };
+
   const generateFix = inc => {
     const id = inc.id;
     setFixStates(s => ({ ...s, [id]: 'generating' }));
@@ -125,13 +158,14 @@ function App() {
           inc={openInc}
           inv={invStates[openInc.id]}
           invProg={invProg[openInc.id]}
+          auto={autoStarted[openInc.id]}
           fixState={fixStates[openInc.id]}
           onBack={() => setOpenInc(null)}
           onGenerateFix={generateFix}
           onOpenFixProgress={openFixProgress}
           onOpenFixResult={openFixResult}
         />
-      : <window.IncidentList invStates={invStates} onOpen={setOpenInc} onInvestigate={investigate} />;
+      : <window.IncidentList invStates={invStates} autoStarted={autoStarted} autoMode={autoMode} onSetAutoMode={applyAutoMode} onOpen={setOpenInc} onInvestigate={investigate} />;
   } else if (view === 'recommendations') {
     body = <window.Recommendations />;
   } else {
