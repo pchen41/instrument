@@ -16,7 +16,7 @@ The product has three primary surfaces:
 
 The design reference is in `design/README.md`. The console prototype is under `design/project/console/`; the auth prototype is under `design/project/auth.jsx`.
 
-The prototype represents the target product direction, not a strict MVP contract. Implementation should match the design intent for MVP surfaces where practical, but may deviate to satisfy this PRD, remove stretch-only actions, add missing required states, or handle backend constraints. Any meaningful design deviation should be documented.
+The console prototype is a visual reference and represents the target product direction, not a strict MVP contract. Implementation should match the design intent for MVP surfaces where practical, but may deviate to satisfy this PRD, remove stretch-only actions, add missing required states, or handle backend constraints. Any meaningful design deviation should be documented.
 
 Prototype comments may clarify product intent, but this PRD is the source of truth for MVP scope. Generated recommendation PRs, generated incident-fix PRs, and applied Datadog monitor changes appear in the target-state prototype but are stretch scope unless explicitly promoted later.
 
