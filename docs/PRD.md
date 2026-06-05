@@ -8,7 +8,7 @@ Instrument does not replace Datadog, GitHub, or TrueFoundry. It connects those s
 
 The product has three primary surfaces:
 
-- **Incidents**: Datadog alerts become incidents that Instrument can investigate using codebase context, recent commits, Datadog logs/traces/metrics, and TrueFoundry MCP/LLM logs.
+- **Incidents**: Datadog alerts become incidents that Instrument can investigate using codebase context, recent commits, Datadog monitors/logs/metrics, and TrueFoundry MCP/LLM logs.
 - **Recommendations**: Instrument proactively suggests observability improvements, including missing metrics, missing logs, missing spans, dashboard gaps, and Datadog monitor improvements.
 - **Integrations**: Users connect GitHub, Datadog, and TrueFoundry and can see each source's connection state.
 
@@ -27,7 +27,7 @@ The design reference is in `design/README.md` and the console prototype is under
 - Instrument will not replace Datadog as the source of truth for monitor state, alert state, logs, metrics, or traces.
 - Instrument will not replace GitHub as the source of truth for code, commits, pull requests, branches, comments, or review state.
 - Instrument will not guarantee a single definitive root cause for every incident. It should present ranked hypotheses with evidence and confidence. Single hypothesis is OK if multiple hypotheses do not exist.
-- MVP will not automatically merge code, apply production monitor changes, or mutate customer systems without explicit human approval, except for posting scoped GitHub PR review comments as part of the PR observability review workflow.
+- MVP will not automatically merge code, apply production monitor changes, generate incident fix PRs, or mutate customer systems without explicit human approval, except for posting scoped GitHub PR review comments as part of the PR observability review workflow. Incident investigations are read-only even when they start automatically.
 
 ## 4. Users and Personas
 
@@ -50,7 +50,7 @@ The application engineer owns service code and pull requests. They receive GitHu
 Instrument uses GitHub to:
 
 - Read repositories, files, branches, commits, pull requests, diffs, and PR metadata.
-- Detect recent deploy-related commits or changes relevant to an incident.
+- Detect recent deploy-related commits or changes relevant to an incident. GitHub commit history is the first deploy-correlation source for MVP; deployment events from other systems may be used later as supplemental evidence.
 - Leave observability review comments on pull requests.
 - Track whether generated or suggested PRs are opened, merged, closed, or stale.
 - Stretch: create branches and pull requests for approved observability improvements or incident fixes.
@@ -62,12 +62,13 @@ GitHub write actions must be explicit. Posting inline PR review comments is auto
 Instrument uses Datadog to:
 
 - Receive alert webhooks.
-- Read monitors, monitor configuration, alert status, service metadata, logs, traces, metrics, and dashboards where available.
+- Read monitors, monitor configuration, alert status, logs, metrics, and Datadog service metadata where available.
+- Read service ownership, criticality, and notification routing only when those fields exist in Datadog. If they are missing, Instrument must not infer or require that metadata for MVP decisions.
 - Suggest new monitors when important emitted metrics are not alerting.
 - Suggest improvements to existing monitors, such as threshold changes, missing tags, missing runbooks, noisy alerts, or missing notifications.
 - Stretch: apply approved Datadog monitor changes after human review.
 
-Datadog remains the source of truth for monitor and alert state. Instrument must avoid suggesting alerts for metrics that it cannot verify exist or can be emitted by the code path.
+Datadog remains the source of truth for monitor and alert state. Instrument must avoid suggesting alerts for metrics that it cannot verify exist or can be emitted by the code path. Datadog traces and dashboards may be used when available, but monitors, logs, and metrics are the required Datadog scopes for the first implementation.
 
 ### 5.3 TrueFoundry
 
@@ -129,13 +130,13 @@ Requirements:
 
 ### 6.3 Datadog Alert Recommendations
 
-Instrument compares codebase context, emitted metrics, existing Datadog monitors, alert history, and service criticality to suggest alert improvements.
+Instrument compares codebase context, emitted metrics, existing Datadog monitors, alert history, and Datadog-provided service metadata to suggest alert improvements.
 
 Examples:
 
 - A service emits an important metric, but no monitor exists.
 - A monitor threshold is too sensitive and creates alert fatigue.
-- A monitor lacks tags, ownership, service scope, notification routing, or a runbook.
+- A monitor lacks tags, Datadog-provided ownership, service scope, notification routing, or a runbook.
 
 Requirements:
 
@@ -144,16 +145,17 @@ Requirements:
 - **ALERT-3**: Monitor improvement recommendations must show the proposed change as a reviewable configuration diff.
 - **ALERT-4**: Instrument must not apply Datadog monitor changes without explicit human approval.
 - **ALERT-5**: Alert recommendations must cite relevant monitor configuration, metric evidence, alert history, or code paths.
+- **ALERT-6**: Service ownership, criticality, and notification routing must be read from Datadog (e.g. monitor/service tags and metadata) when available. When this metadata is absent, Instrument must not fabricate it, require it, or block recommendations on it; it should proceed without ownership/criticality/routing context.
 
 ### 6.4 Datadog Alert Ingestion and Incident Investigation
 
-When Datadog sends an alert webhook, Instrument creates or updates an incident. In MVP, an active incident waits for a human to press `Investigate`, matching the design prototype. Automatic investigation may be added later as a configurable behavior.
+When Datadog sends an alert webhook, Instrument creates or updates an incident. Whether the resulting investigation starts on its own is governed by a workspace-level **investigation-start policy** (see INC-10). The default is `manual`, matching the design prototype, where an active incident waits for a human to press `Investigate`. Regardless of the policy, investigations are strictly read-only: they read connected signals and correlate them, but never mutate any system and never auto-generate a fix (see INC-13).
 
 Investigation inputs include:
 
 - Datadog alert payload and monitor configuration.
-- Datadog logs, traces, metrics, service tags, and dashboards.
-- GitHub commits, pull requests, files, diffs, and recent deploy-related changes.
+- Datadog logs, metrics, service tags, and available Datadog service metadata.
+- GitHub commits, pull requests, files, diffs, and recent deploy-related changes. GitHub commit history is the first source used for deploy correlation.
 - TrueFoundry MCP/LLM logs when relevant.
 
 Requirements:
@@ -167,6 +169,11 @@ Requirements:
 - **INC-7**: Confidence levels must use stable bands: `High`, `Likely`, and `Low`. The UI may label the leading hypothesis as `Root cause` only for `High`; otherwise it should label it as `Leading hypothesis`.
 - **INC-8**: If the root cause is outside the codebase or not fixable by Instrument, the investigation must explain why no code fix can be generated and suggest a next step.
 - **INC-9**: Resolved incidents must remain visible in a resolved/archive view with their final findings.
+- **INC-10**: A workspace-level investigation-start policy must offer three modes: `manual` (default — every investigation waits for a human to press Investigate), `automatic` (Instrument starts investigating every firing alert as it arrives), and `smart`/let-Instrument-decide (Instrument starts on its own for important, clear-cut alerts and waits for a human when the situation is ambiguous). Changing the policy must not disturb investigations already in flight.
+- **INC-11**: In `smart` mode, Instrument must only auto-start when the alert is clear-cut and must leave ambiguous alerts waiting for a human; it must not pretend certainty about whether an alert warrants auto-investigation.
+- **INC-12**: Any investigation that began without a human must be visibly marked in both the incident list and the incident detail (e.g. a "Started automatically" badge), so auto-started work is auditable.
+- **INC-13**: Investigations must be read-only and must never auto-generate or apply a fix. Fix generation stays human-initiated (and remains stretch scope) under every policy, including `automatic` and `smart`.
+- **INC-14**: While a user is viewing an incident's investigation detail, the view must update in place as the investigation progresses — advancing progress phases and surfacing hypotheses, evidence, completion, and failure — without requiring a manual page refresh. This live update must be driven from durable server state (per JOB-7), not browser-local job state.
 
 ### 6.5 Web Console
 
@@ -184,11 +191,12 @@ Requirements:
 - **UI-2**: Long-running work must show named progress phases rather than an opaque spinner.
 - **UI-3**: Retryable API failures must be visible to the user with clear status text while the backend retries.
 - **UI-4**: Failed jobs must preserve completed progress and show a clear failure state with the affected integration.
-- **UI-5**: If incidents, recommendations, PR review records, integration state, job state, or generated PR state changes while the user is viewing related content, the console must inform the user and provide a refresh action.
+- **UI-5**: If incidents, recommendations, PR review records, integration state, job state, or generated PR state changes while the user is viewing related content, the console must update the visible state automatically where practical. Where automatic replacement would be disruptive, the console may inform the user and provide a refresh action.
 - **UI-6**: Refreshing content must not create duplicate jobs unless the user explicitly requests a new investigation or regeneration.
 - **UI-7**: The console must gracefully handle missing integrations, expired credentials, rate limits, partial data, and network/API failures.
 - **UI-8**: All destructive or externally mutating actions must require explicit confirmation.
 - **UI-9**: Terminal failed jobs must expose a manual retry action when retrying is safe and idempotent.
+- **UI-10**: The incident investigation detail screen must automatically update progress phases, retry notes, hypotheses, evidence, and completion or failure state as the investigation job advances, without requiring a browser refresh or manual refresh action.
 
 ## 7. Durable Job and Progress Requirements
 
@@ -238,15 +246,15 @@ Requirements:
 - **SEC-5**: Inbound Datadog webhooks must be authenticated or signature-verified before they can create or update incidents.
 - **SEC-6**: The console must require authenticated users and must scope visible repositories, incidents, recommendations, jobs, and integrations to the user's organization or workspace.
 
-## 10. Notifications and Refresh Behavior
+## 10. Live Updates, Notifications, and Refresh Behavior
 
 Requirements:
 
-- **NOTIFY-1**: When a new incident arrives while a user is on an incident list page, the console must show that new content is available and offer a refresh action.
-- **NOTIFY-2**: When recommendations are added, changed, accepted, dismissed, or outdated while a user is on the recommendations page, the console must show that content changed and offer a refresh action.
+- **NOTIFY-1**: When a new incident arrives while a user is on an incident list page, the console must either insert or update the incident in place, or show that new content is available and offer a refresh action if automatic insertion would disrupt the current view.
+- **NOTIFY-2**: When recommendations are added, changed, accepted, dismissed, or outdated while a user is on the recommendations page, the console must update the affected content automatically where practical, or show that content changed and offer a refresh action if automatic replacement would disrupt the current view.
 - **NOTIFY-3**: In-console notifications must be debounced to avoid noisy repeated prompts during alert storms or batch scans.
 - **NOTIFY-4**: The PRD does not require external notifications such as Slack, email, or PagerDuty for MVP.
-- **NOTIFY-5**: The implementation may use polling, realtime events, or version stamps for change detection, but the server must expose enough version information for the console to know when its current view is stale.
+- **NOTIFY-5**: The implementation may use polling, realtime events, or version stamps for change detection, but the server must expose enough version information for the console to know when its current view is stale and enough job progress information for the investigation detail screen to update live.
 
 ## 11. MVP Scope
 
@@ -254,9 +262,10 @@ The MVP must include:
 
 - GitHub integration for reading repositories, commits, PRs, and diffs.
 - GitHub PR observability review comments.
-- Datadog integration for receiving alert webhooks and reading monitor/log/trace/metric context.
+- Datadog integration for receiving alert webhooks and reading monitor/log/metric context. Traces and dashboards are deferred past the first implementation.
 - TrueFoundry integration for reading MCP/LLM logs.
 - Incident creation, grouping, investigation, evidence display, and resolved incident history.
+- Investigation-start policy (`manual`/`automatic`/`smart`) with auto-started badges, and a live-updating investigation detail view.
 - Proactive recommendations for instrumentation and Datadog monitor improvements.
 - Recommendations archive with accepted, dismissed, and outdated states.
 - Durable job state for long-running work and retries.
@@ -294,6 +303,7 @@ Stretch functionality includes:
 - Given an existing emitted metric with no monitor, Instrument suggests a new Datadog alert and cites metric/code evidence.
 - Given a noisy Datadog monitor, Instrument suggests a specific threshold or configuration improvement and shows the proposed configuration diff.
 - Given a metric cannot be verified, Instrument does not recommend a Datadog alert for it unless the recommendation explicitly depends on first adding that metric.
+- Given Datadog does not provide ownership, criticality, or notification routing for a service, Instrument omits that context from recommendations instead of inferring it or blocking the recommendation.
 
 ### 13.4 Incidents
 
@@ -305,19 +315,23 @@ Stretch functionality includes:
 - Given the root cause is upstream or otherwise not fixable through code, Instrument explains that no code fix can be generated and suggests a next step.
 - Given TrueFoundry logs contain an LLM/tool failure correlated by service, request ID, trace ID, or incident time window, Instrument can cite those logs as evidence in a hypothesis.
 - Given an investigation job reaches a terminal failed state, the console shows the failure and provides a manual retry action when the job is safe to retry.
+- Given the investigation-start policy is `manual`, a firing alert creates an incident that stays `new` until a human presses Investigate.
+- Given the policy is `automatic`, a firing alert's investigation starts on its own, and the incident shows a "Started automatically" badge in the list and detail.
+- Given the policy is `smart`, Instrument auto-starts the investigation for a clear-cut/important alert and leaves an ambiguous alert waiting for a human.
+- Given the policy is changed while an investigation is already running, that in-flight investigation is left undisturbed.
+- Given a user is viewing a running investigation's detail, its progress phases, hypotheses, evidence, and final result update in place without a manual refresh.
+- Given any policy (including `automatic` and `smart`), no investigation generates or applies a fix automatically; fix generation requires explicit human action.
 
 ### 13.5 Console Reliability
 
 - Given a user refreshes the browser during a running job, the job state and progress are restored from the server.
-- Given a new incident arrives while the user is viewing the incident list, the console indicates new content is available and provides a refresh action.
+- Given a new incident arrives while the user is viewing the incident list, the console updates the list in place or indicates new content is available and provides a refresh action.
 - Given an integration is disconnected or missing permissions, the console communicates the degraded state and avoids pretending analysis is complete.
 - Given an external write action is requested, the console asks for confirmation before taking the action.
 - Given the backend restarts during a running job, the console can recover persisted job state after the backend is available again.
 
-## 14. Open Questions
+## 14. Resolved Decisions
 
-- What deployment signal should Instrument use first when correlating incidents with recent code changes: GitHub commit history, deployment events from Datadog, or another source? Answer: Github commit history
-- Which Datadog data scopes are required for the first implementation: monitors only, or monitors plus logs, metrics, traces, and dashboards?
-Answer: Monitors, logs, metrics for now
-- How should users configure service ownership, criticality, and notification routing for recommendations and incidents?
-Answer: That would be configured a read from DataDog if it exists. If not, don't use this info.
+- GitHub commit history is the first deploy-correlation source for incidents. Deployment events from other systems may be added later as supplemental evidence.
+- The first Datadog implementation requires monitors, logs, and metrics. Traces and dashboards are not required for MVP.
+- Service ownership, criticality, and notification routing should be read from Datadog when present. If Datadog does not provide that metadata, Instrument should omit it rather than infer it or ask users to configure it separately.
