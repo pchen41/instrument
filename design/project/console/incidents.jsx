@@ -8,7 +8,7 @@ const AUTO_MODES = [
   { id: 'auto', short: 'Automatic', label: 'Automatic',
     desc: 'Instrument starts investigating every firing alert the moment it arrives.' },
   { id: 'smart', short: 'Instrument decides', label: 'Let Instrument decide', spark: true,
-    desc: 'Instrument starts on its own for clear-cut alerts, and waits for you when the cause looks ambiguous.' },
+    desc: 'Instrument starts on its own for important alerts, and waits for you when the situation looks ambiguous.' },
 ];
 
 function AutoInvestigateMenu({ mode, onSet }) {

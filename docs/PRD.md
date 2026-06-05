@@ -181,8 +181,8 @@ The console must match the intent of the design files and provide a polished, re
 
 Required views:
 
-- **Incidents**: Active and resolved incident lists; investigation-start setting control; incident detail; investigation progress; hypotheses; key signals; timeline; correlated code changes; stretch fix generation state where available.
-- **Recommendations**: Active and archived recommendations; multi-step recommendation progress; PR review records; configuration change drawers; stretch generated PR drawers.
+- **Incidents**: Active and resolved incident lists; investigation-start setting control; incident detail; investigation progress; hypotheses; key signals; timeline; correlated code changes; (stretch) fix generation state where available.
+- **Recommendations**: Active and archived recommendations; multi-step recommendation progress; PR review records; configuration change drawers; (stretch) generated PR drawers.
 - **Integrations**: GitHub, Datadog, and TrueFoundry connection state.
 
 Requirements:

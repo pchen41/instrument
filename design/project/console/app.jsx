@@ -25,8 +25,7 @@ const SEED_INV_ACTIVE = 3;
 // regardless of this setting; that stays human-initiated. Modes:
 //   'manual' — every investigation waits for a human to press Investigate (default).
 //   'auto'   — Instrument starts investigating every firing alert as it arrives.
-//   'smart'  — Instrument starts on its own for clear-cut alerts, and waits for a
-//              human when the situation looks ambiguous.
+//   'smart'  — Instrument starts on its own for important alerts, waits for a human when the situation looks ambiguous.
 function App() {
   const [view, setView] = React.useState('incidents');
   const [openInc, setOpenInc] = React.useState(null);     // investigation
