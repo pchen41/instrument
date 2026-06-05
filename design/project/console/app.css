@@ -38,7 +38,9 @@ button{font-family:inherit;cursor:pointer;}
 .source .ok{margin-left:auto;color:var(--ok);font-size:14px;}
 
 /* ---- Top bar ---- */
-.main{display:flex;flex-direction:column;overflow:hidden;}
+/* The scroll port is the full-width .main so its scrollbar sits at the page
+   edge, not hugging the centered narrow column. */
+.main{display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;}
 .topbar{display:flex;align-items:center;gap:14px;padding:12px 24px;border-bottom:1px solid var(--border);background:rgba(247,244,238,0.8);backdrop-filter:blur(8px);position:sticky;top:0;z-index:20;}
 .topbar .crumb{font-size:14px;color:var(--ink-3);}
 .topbar .crumb b{color:var(--ink);font-weight:600;}
@@ -50,7 +52,7 @@ button{font-family:inherit;cursor:pointer;}
 .icon-btn .badge{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--crit);border:2px solid var(--paper);}
 .avatar{width:36px;height:36px;border-radius:50%;background:var(--brand-600);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:600;}
 
-.content{flex:1;overflow-y:auto;padding:28px 24px;}
+.content{flex:1;padding:28px 24px;}
 .content.narrow{max-width:780px;margin:0 auto;width:100%;}
 
 /* ---- Buttons ---- */
@@ -263,6 +265,21 @@ button{font-family:inherit;cursor:pointer;}
 .chg-row .chg-to{color:var(--ok-ink);background:var(--ok-tint);border-radius:4px;padding:1px 7px;}
 .pr-note{font-size:12.5px;color:var(--ink-3);line-height:1.5;margin:12px 0 0;}
 
+/* PR-review drawer — Instrument's drafted comments on an incoming PR */
+.rev-pr{display:flex;align-items:flex-start;gap:11px;background:var(--surface-2);border:1px solid var(--border-faint);border-radius:var(--r-md);padding:13px 15px;margin-bottom:14px;}
+.rev-pr > i{font-size:19px;color:var(--brand-600);flex-shrink:0;margin-top:1px;}
+.rev-pr-title{font-size:14.5px;font-weight:600;letter-spacing:-.005em;line-height:1.35;}
+.rev-pr-meta{font-size:12.5px;color:var(--ink-3);margin-top:3px;}
+.rev-pr-meta .mono{font-size:12px;color:var(--ink-2);}
+.rev-intro{font-size:13.5px;color:var(--ink-2);line-height:1.55;margin:0 0 18px;}
+.rev-comments{display:flex;flex-direction:column;gap:12px;}
+.rev-comment{border:1px solid var(--border-faint);border-radius:var(--r-md);background:var(--surface);padding:13px 15px;}
+.rev-loc{display:flex;align-items:center;gap:7px;padding-bottom:9px;margin-bottom:9px;border-bottom:1px solid var(--border-faint);}
+.rev-loc i{font-size:14px;color:var(--ink-4);flex-shrink:0;}
+.rev-loc .mono{font-size:12px;color:var(--ink-2);}
+.rev-text{font-size:13px;color:var(--ink);line-height:1.55;margin:0;}
+.rev-code{margin-top:10px;font-size:12px;line-height:1.6;color:var(--brand-800);background:var(--sunken);border:1px solid var(--border-faint);border-radius:var(--r-sm);padding:8px 11px;overflow-x:auto;}
+
 /* ---- Integrations ---- */
 .intg-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
 .intg{padding:18px 19px;display:flex;align-items:center;gap:14px;}
@@ -281,6 +298,41 @@ button{font-family:inherit;cursor:pointer;}
 .drawer-body{flex:1;overflow-y:auto;padding:22px;}
 .drawer-foot{padding:16px 22px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;background:var(--surface-2);}
 @media (prefers-reduced-motion:reduce){.drawer,.scrim{animation:none;}}
+
+/* clickable "generating" pill — opens the live progress drawer */
+.gen-live{cursor:pointer;}
+.gen-live i.affordance{font-size:13px;opacity:.5;margin-left:-1px;}
+
+/* ---- Live generation progress (in the action drawer) ---- */
+.gen-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;}
+.gen-step{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:var(--r-md);font-size:14px;color:var(--ink-3);transition:background var(--dur) var(--ease-soft),color var(--dur) var(--ease-soft);}
+.gen-step .gen-label{flex:1;min-width:0;}
+.gen-step.active{background:var(--brand-tint);color:var(--ink);}
+.gen-step.retrying{background:var(--warn-tint);color:var(--warn-ink);}
+.gen-step.done{color:var(--ink-2);}
+.gen-mark{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}
+.gen-mark i{font-size:16px;}
+.gen-step.done .gen-mark i{color:var(--ok);}
+.gen-step.retrying .gen-mark i{color:var(--warn);}
+.gen-pend{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--border-strong);}
+.gen-spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--brand-200);border-top-color:var(--brand-600);animation:gen-spin .7s linear infinite;}
+@keyframes gen-spin{to{transform:rotate(360deg);}}
+@media (prefers-reduced-motion:reduce){.gen-spin{animation:none;}}
+.gen-tag{font:var(--caption);text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--warn-ink);background:var(--warn-tint);padding:2px 8px;border-radius:var(--r-pill);flex-shrink:0;}
+.gen-tag.muted{color:var(--brand-700);background:transparent;padding:2px 4px;}
+.gen-note{display:flex;align-items:flex-start;gap:10px;margin-top:16px;padding:12px 14px;border-radius:var(--r-md);background:var(--warn-tint);color:var(--warn-ink);font-size:13px;line-height:1.5;}
+.gen-note i{font-size:16px;color:var(--warn);flex-shrink:0;margin-top:1px;}
+
+/* ---- "No code fix" — Instrument is honest about its boundary: an upstream /
+   non-code root cause has no PR to draft. Calm, never an error. ---- */
+.no-fix{display:flex;gap:14px;align-items:flex-start;margin-top:18px;padding:16px 18px;border-radius:var(--r-md);background:var(--sunken);border:1px solid var(--border);}
+.no-fix > i{font-size:22px;color:var(--brand-600);flex-shrink:0;margin-top:1px;}
+.no-fix .nf-title{font-weight:650;font-size:15px;color:var(--ink);margin-bottom:5px;}
+.no-fix .nf-reason{font-size:14px;color:var(--ink-2);line-height:1.55;margin:0 0 13px;}
+.no-fix .nf-next{font-size:13.5px;color:var(--ink-2);line-height:1.55;margin:0;}
+.no-fix .nf-next-label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--ink-3);margin-bottom:3px;}
+.nf-chip{display:inline-flex;align-items:center;gap:6px;margin-top:10px;font-size:12.5px;color:var(--ink-3);}
+.nf-chip i{font-size:14px;color:var(--brand-600);}
 
 /* ---- Confirmation modal ---- */
 .modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:440px;max-width:92vw;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-xl);box-shadow:var(--shadow-lg);z-index:60;padding:24px;animation:popin var(--dur) var(--ease);}

@@ -91,4 +91,41 @@ function Icon({ name, className, style }) {
   return <i className={'ph ' + ph + (className ? ' ' + className : '')} style={style} />;
 }
 
-Object.assign(window, { Pill, Activity, Confidence, Sparkle, ConfirmDialog, Icon, ALERT_MAP, RULE_COLOR });
+/* A live phase checklist for any long-running Instrument job (investigating an
+   incident, drafting a fix/PR/change). Each phase carries its own state so the
+   user sees exactly where the job is — and, crucially, gets honest feedback when
+   a call fails and Instrument is retrying it, rather than a blind spinner.
+   States: 'pending' | 'active' | 'retrying' | 'done'. `note` surfaces the reason
+   for a retry in calm, plain language. */
+function GenProgress({ phases = [], note }) {
+  return (
+    <React.Fragment>
+      <ol className="gen-steps">
+        {phases.map((p, i) => (
+          <li key={i} className={'gen-step ' + p.state}>
+            <span className="gen-mark">
+              {p.state === 'done'
+                ? <Icon name="check" />
+                : p.state === 'retrying'
+                  ? <Icon name="undo" />
+                  : p.state === 'active'
+                    ? <span className="gen-spin"></span>
+                    : <span className="gen-pend"></span>}
+            </span>
+            <span className="gen-label">{p.label}</span>
+            {p.state === 'retrying' && <span className="gen-tag">Retrying</span>}
+            {p.state === 'active' && <span className="gen-tag muted">Working</span>}
+          </li>
+        ))}
+      </ol>
+      {note && (
+        <div className="gen-note">
+          <Icon name="warning" />
+          <span>{note}</span>
+        </div>
+      )}
+    </React.Fragment>
+  );
+}
+
+Object.assign(window, { Pill, Activity, Confidence, Sparkle, ConfirmDialog, Icon, GenProgress, ALERT_MAP, RULE_COLOR });

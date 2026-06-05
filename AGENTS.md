@@ -9,12 +9,12 @@ Remember to commit regularly (probably after every task, but maybe multiple time
 How to headlessly invoke other agents:
 
 claude:
-env -u CLAUDECODE claude -p "prompt" --dangerously-skip-permissions
+env -u CLAUDECODE claude -p "prompt"
 
 Unset CLAUDECODE so the subprocess does not treat itself as a nested Claude Code session.
 
 codex:
-codex exec --full-auto --skip-git-repo-check "prompt"
+codex exec --skip-git-repo-check "prompt"
 
 gemini:
 agy -p "prompt"

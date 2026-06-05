@@ -31,6 +31,9 @@ function IncidentRow({ inc, inv, onOpen, onInvestigate }) {
                 <Confidence word={inc.confWord} />
               </div>
               <div className="fx">{lead.t}.</div>
+              {inc.fixable === false && (
+                <div className="nf-chip"><window.Icon name="shield" />Upstream cause — no code fix to generate</div>
+              )}
             </div>
           </div>
         )}
@@ -95,12 +98,12 @@ function IncidentList({ invStates, onOpen, onInvestigate }) {
   );
 }
 
-function Investigation({ inc, inv, fixState, onBack, onGenerateFix }) {
+function Investigation({ inc, inv, invProg, fixState, onBack, onGenerateFix, onOpenFixProgress, onOpenFixResult }) {
   const { Pill, Activity, Confidence, ConfirmDialog } = window;
   const [confirm, setConfirm] = React.useState(false);
   const resolved = inc.state === 'resolved';
   const done = inv === 'complete';
-  const generating = fixState === 'generating';
+  const noFix = inc.fixable === false;
   return (
     <div className="content">
       <button className="btn btn-ghost btn-sm" onClick={onBack} style={{ marginBottom: '14px', marginLeft: '-6px' }}>
@@ -136,28 +139,42 @@ function Investigation({ inc, inv, fixState, onBack, onGenerateFix }) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="ctitle">Investigating</div>
                   <div className="ctext">Instrument is correlating traces, recent deploys, and error logs for {inc.service}. A cause will appear here when the investigation completes.</div>
+                  {invProg && (
+                    <div style={{ marginTop: '14px' }}>
+                      <window.GenProgress phases={invProg.phases} note={invProg.note} />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '16px', flexWrap: 'wrap' }}>
-              {!done && (
-                <span className="gen-hint">
-                  <window.Icon name="info" />
-                  A fix can be generated once the investigation completes.
-                </span>
-              )}
-              <button
-                className={'btn ' + (generating ? 'btn-secondary' : 'btn-primary')}
-                style={{ marginLeft: 'auto' }}
-                disabled={!done || generating}
-                onClick={() => setConfirm(true)}
-              >
-                {generating
-                  ? <React.Fragment><span className="gen-dot pulse"></span>Generating fix</React.Fragment>
-                  : <React.Fragment><window.Icon name="pr" />Generate fix</React.Fragment>}
-              </button>
-            </div>
+            {done && noFix ? (
+              <div className="no-fix">
+                <window.Icon name="shield" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="nf-title">No code fix to generate</div>
+                  <p className="nf-reason">{inc.noFix.reason}</p>
+                  <p className="nf-next"><span className="nf-next-label">Suggested next step</span>{inc.noFix.nextStep}</p>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '16px', flexWrap: 'wrap' }}>
+                {!done && (
+                  <span className="gen-hint">
+                    <window.Icon name="info" />
+                    A fix can be generated once the investigation completes.
+                  </span>
+                )}
+                {(() => {
+                  const base = { marginLeft: 'auto' };
+                  if (!done) return <button className="btn btn-primary" style={base} disabled><window.Icon name="pr" />Generate fix</button>;
+                  if (fixState === 'generating') return <button className="btn btn-secondary gen-live" style={base} onClick={() => onOpenFixProgress(inc)}><span className="gen-dot pulse"></span>Generating fix<window.Icon name="arrow-right" className="affordance" /></button>;
+                  if (fixState === 'ready') return <button className="btn btn-primary" style={base} onClick={() => onOpenFixResult(inc)}><window.Icon name="pr" />View fix PR</button>;
+                  if (fixState === 'merged') return <span className="rs-done" style={base}><window.Icon name="check-circle" /><span>Fix PR #{inc.fix.number} merged</span></span>;
+                  return <button className="btn btn-primary" style={base} onClick={() => setConfirm(true)}><window.Icon name="pr" />Generate fix</button>;
+                })()}
+              </div>
+            )}
           </div>
 
           {done && inc.diff && (

@@ -14,7 +14,7 @@ const SOURCES = [
 const INCIDENTS = [
   {
     id: 'INC-482',
-    alert: 'firing', state: 'active', inv0: 'complete', fix0: 'generating',
+    alert: 'firing', state: 'active', inv0: 'complete',
     title: 'Checkout latency is elevated',
     service: 'payments-api',
     desc: 'p99 latency is up 318% and checkout requests are slowing down.',
@@ -44,7 +44,7 @@ const INCIDENTS = [
       { t: 'add', s: '+ maxConnections: 10,' },
       { t: 'ctx', s: '  idleTimeoutMs: 30000,' },
     ],
-    fix: { title: 'Revert connection-pool size to 50', branch: 'instrument/fix-inc-482', files: ['db/pool.ts'] },
+    fix: { title: 'Revert connection-pool size to 50', branch: 'instrument/fix-inc-482', number: 3127, files: ['db/pool.ts'], desc: 'Restores maxConnections to 50 in db/pool.ts, reverting the change from PR #3120 that triggered pool exhaustion. Latency should return to baseline within a minute of deploy.' },
   },
   {
     id: 'INC-484',
@@ -62,7 +62,7 @@ const INCIDENTS = [
       { k: 'region', v: 'eu-west-1' },
     ],
     hypotheses: [
-      { lead: true, t: 'Thumbnail worker pool starved', d: 'The resize worker queue is backing up and CPU is pinned. Timing lines up with a 3× upload-volume bump, but no code change is implicated yet.' },
+      { lead: true, t: 'Thumbnail worker pool starved', d: 'The resize worker pool is capped at 4 in workers/resize.config.ts; at the current 3× upload volume the queue backs up and CPU pins. Raising the cap matches the timing.' },
       { lead: false, t: 'Object-store throttling', d: 'A few S3 503s appear in logs, but the rate is too low to explain the p95. Not ruled out.' },
     ],
     timeline: [
@@ -70,8 +70,13 @@ const INCIDENTS = [
       { kind: 'act', time: '14:11:30', title: 'Instrument began investigating', desc: 'Correlating worker-queue depth, CPU, and object-store responses.' },
       { kind: 'dot', time: '14:14:20', title: 'Leading hypothesis proposed', desc: 'Worker-pool starvation. Confidence is moderate — a fix can be generated for review.' },
     ],
-    diff: null,
-    fix: null,
+    diff: [
+      { t: 'ctx', s: '  // workers/resize.config.ts' },
+      { t: 'del', s: '- concurrency: 4,' },
+      { t: 'add', s: '+ concurrency: 12,' },
+      { t: 'ctx', s: '  queueHighWaterMark: 5000,' },
+    ],
+    fix: { title: 'Raise resize-worker concurrency to 12', branch: 'instrument/fix-inc-484', number: 3129, files: ['workers/resize.config.ts'], desc: 'Raises the resize worker pool from 4 to 12 in workers/resize.config.ts so the upload queue drains under the higher volume. Confidence is moderate — review the queue metrics after deploy.' },
   },
   {
     id: 'INC-481',
@@ -121,8 +126,44 @@ const INCIDENTS = [
     timeline: [
       { kind: 'crit', time: '14:31:14', title: 'Datadog monitor fired', desc: 'RSS memory on notifications-worker crossed 1.5 GB.' },
     ],
+    diff: [
+      { t: 'ctx', s: '  // notifications/retryQueue.ts' },
+      { t: 'add', s: '+ maxBufferedRetries: 5000,' },
+      { t: 'add', s: '+ evictOldestWhenFull: true,' },
+      { t: 'ctx', s: '  backoffMs: 2000,' },
+    ],
+    fix: { title: 'Bound the retry buffer in notifications-worker', branch: 'instrument/fix-inc-485', number: 3131, files: ['notifications/retryQueue.ts'], desc: 'Caps the retry queue at 5,000 entries and evicts the oldest when full, stopping the unbounded growth that drives the leak toward an OOM.' },
+  },
+  {
+    id: 'INC-486',
+    alert: 'firing', state: 'active', inv0: 'complete', fixable: false,
+    title: 'Card payments failing at the processor',
+    service: 'payments-api',
+    desc: 'Authorization success rate dropped to 71% and the processor is returning elevated 5xx on charge calls.',
+    started: '8m ago',
+    confWord: 'High',
+    source: 'Datadog monitor',
+    metrics: [
+      { k: 'auth success', v: '71%' },
+      { k: 'processor 5xx', v: '24%' },
+      { k: 'time to detect', v: '1m 19s' },
+      { k: 'affected reqs', v: '~3.4k' },
+    ],
+    hypotheses: [
+      { lead: true, t: 'Upstream incident at the payment processor (Stripe)', d: 'Charge-call errors are all 5xx returned by the processor, not raised in our code. They began at 14:39 and line up exactly with an active incident on Stripe’s status page for the Charges API. No recent deploy touched the payments path.' },
+      { lead: false, t: 'Expired processor API credentials', d: 'Ruled out — expired keys would return 401s, and the failures are 5xx with valid credentials.' },
+    ],
+    timeline: [
+      { kind: 'crit', time: '14:39:11', title: 'Datadog monitor fired', desc: 'Charge authorization success on payments-api fell below 90%.' },
+      { kind: 'act', time: '14:39:34', title: 'Instrument began investigating', desc: 'Correlated charge-call errors with recent deploys, traces, and the processor status feed.' },
+      { kind: 'dot', time: '14:41:02', title: 'Root cause proposed', desc: 'High confidence: an upstream processor incident, not a code change.' },
+    ],
     diff: null,
     fix: null,
+    noFix: {
+      reason: 'The root cause is an active incident at the payment processor (Stripe), not a change in this codebase. There is no code Instrument can change to resolve it.',
+      nextStep: 'Stripe reports a degradation on their Charges API. Track their status page and consider failing over to the backup processor if it persists. Instrument will mark this resolved when the alert clears.',
+    },
   },
   {
     id: 'INC-479',
@@ -239,6 +280,30 @@ const RECOMMENDATIONS = [
             { t: 'add', s: '+ });' },
           ] } },
       { icon: 'chart', label: 'Add a failure-by-reason panel to the auth dashboard', cta: 'Add panel', tone: 'open', waitsFor: 'the logs PR is merged' },
+    ] },
+
+  /* PR-review recommendation: Instrument read an incoming pull request, found
+     observability gaps in the diff, and left inline review comments on the PR
+     automatically. This card is a record of what it posted — viewing the comments
+     links out to the PR; there's nothing to approve. Tone 'review'. */
+  { id: 'r8', icon: 'pr', kind: 'PR review',
+    title: 'New bulk-export endpoint ships with no instrumentation',
+    desc: 'PR #3142 adds a bulk-export endpoint that pages through the database and writes to object storage, with no metrics or logs on either path. Instrument reviewed the diff and left 3 comments on the PR suggesting where to add observability before it merges.',
+    steps: [
+      { icon: 'eye', label: '3 observability comments left on PR #3142', cta: 'View comments', tone: 'review',
+        review: { number: 3142, title: 'Add bulk-export endpoint', author: 'maya-chen', branch: 'feature/bulk-export',
+          desc: 'Instrument read the diff and found three spots where a future investigation would go blind. These comments are on the PR for the author to act on before it merges.',
+          comments: [
+            { file: 'export/handler.ts', line: 48,
+              body: 'This loop pages through the full result set with no timing. A histogram around the export would make a slow export distinguishable from a hung request.',
+              code: "exportDuration.observe(Date.now() - start);" },
+            { file: 'export/handler.ts', line: 71,
+              body: 'The object-store upload has no failure metric. A counter keyed by error code would let an alert catch a storage regression before users report failed exports.',
+              code: "uploadErrors.inc({ code: err.code });" },
+            { file: 'export/queue.ts', line: 23,
+              body: 'Jobs are enqueued here with no depth metric — the same blind spot that hid the payments-api backlog. A queue-depth gauge would make a building backlog observable.',
+              code: null },
+          ] } },
     ] },
 
   /* Seeded archive examples — one per archived state. Accepted = the change was
