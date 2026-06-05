@@ -104,7 +104,7 @@ Requirements:
 
 ### 6.2 Proactive Observability Recommendations
 
-Instrument scans connected repositories and observability data to find gaps before they become incidents. MVP should support both a manual scan trigger and a automatic scan. The initial automatic scan trigger/cadence may be implementation-defined, but scan results must record the repository/service scope, trigger source, start time, completion time, and whether the result is stale.
+Instrument scans connected repositories and observability data to find gaps before they become incidents. MVP should support both a manual scan trigger and an automatic scan. The initial automatic scan trigger/cadence may be implementation-defined, but scan results must record the repository/service scope, trigger source, start time, completion time, and whether the result is stale.
 
 Examples:
 
@@ -149,7 +149,7 @@ Requirements:
 
 ### 6.4 Datadog Alert Ingestion and Incident Investigation
 
-When Datadog sends an alert webhook, Instrument creates or updates an incident. Whether the resulting investigation starts on its own is governed by a workspace-level **investigation-start policy** (see INC-10). The default is `manual`, matching the design prototype, where an active incident waits for a human to press `Investigate`. Regardless of the policy, investigations are strictly read-only: they read connected signals and correlate them, but never mutate any system and never auto-generate a fix (see INC-13).
+When Datadog sends an alert webhook, Instrument creates or updates an incident. Whether the resulting investigation starts on its own is governed by a workspace-level **investigation-start setting** (see INC-10). The default is `manual`, matching the design prototype, where an active incident waits for a human to press `Investigate`. Regardless of the setting, investigations are strictly read-only: they read connected signals and correlate them, but never mutate any system and never auto-generate a fix (see INC-13).
 
 Investigation inputs include:
 
@@ -164,15 +164,15 @@ Requirements:
 - **INC-2**: Incident grouping must avoid one Datadog alert storm creating many duplicate incidents. Before root cause is known, grouping should use monitor ID, service, environment, alert scope/tags, alert transition, and a bounded time window.
 - **INC-3**: An incident must track alert state, incident state, service, title, description, source, start time, key signals, investigation state, timeline, and evidence.
 - **INC-4**: Investigation display states must include `new`, `investigating`, `complete`, and `failed`. These display states are derived from the durable job state: no job maps to `new`, `queued`/`running`/`retrying` maps to `investigating`, `succeeded` maps to `complete`, and terminal `failed` maps to `failed`.
-- **INC-5**: Investigation output must present ranked hypotheses when appropriate. If there is very obviously a root cause, multiple hypothesis are not necessary.
+- **INC-5**: Investigation output must present ranked hypotheses when appropriate. If there is very obviously a root cause, multiple hypotheses are not necessary.
 - **INC-6**: A hypothesis must include evidence references, confidence, and reasoning.
 - **INC-7**: Confidence levels must use stable bands: `High`, `Likely`, and `Low`. The UI may label the leading hypothesis as `Root cause` only for `High`; otherwise it should label it as `Leading hypothesis`.
 - **INC-8**: If the root cause is outside the codebase or not fixable by Instrument, the investigation must explain why no code fix can be generated and suggest a next step.
 - **INC-9**: Resolved incidents must remain visible in a resolved/archive view with their final findings.
-- **INC-10**: A workspace-level investigation-start policy must offer three modes: `manual` (default — every investigation waits for a human to press Investigate), `automatic` (Instrument starts investigating every firing alert as it arrives), and `smart`/let-Instrument-decide (Instrument starts on its own for important, clear-cut alerts and waits for a human when the situation is ambiguous). Changing the policy must not disturb investigations already in flight.
+- **INC-10**: A workspace-level investigation-start setting must offer three modes: `manual` (default — every investigation waits for a human to press Investigate), `auto`/Automatic (Instrument starts investigating every firing alert as it arrives), and `smart`/Let Instrument decide (Instrument starts on its own for important, clear-cut alerts and waits for a human when the situation is ambiguous). Changing the setting must not disturb investigations already in flight.
 - **INC-11**: In `smart` mode, Instrument must only auto-start when the alert is clear-cut and must leave ambiguous alerts waiting for a human; it must not pretend certainty about whether an alert warrants auto-investigation.
 - **INC-12**: Any investigation that began without a human must be visibly marked in both the incident list and the incident detail (e.g. a "Started automatically" badge), so auto-started work is auditable.
-- **INC-13**: Investigations must be read-only and must never auto-generate or apply a fix. Fix generation stays human-initiated (and remains stretch scope) under every policy, including `automatic` and `smart`.
+- **INC-13**: Investigations must be read-only and must never auto-generate or apply a fix. Fix generation stays human-initiated (and remains stretch scope) under every setting, including `auto` and `smart`.
 - **INC-14**: While a user is viewing an incident's investigation detail, the view must update in place as the investigation progresses — advancing progress phases and surfacing hypotheses, evidence, completion, and failure — without requiring a manual page refresh. This live update must be driven from durable server state (per JOB-7), not browser-local job state.
 
 ### 6.5 Web Console
@@ -181,7 +181,7 @@ The console must match the intent of the design files and provide a polished, re
 
 Required views:
 
-- **Incidents**: Active and resolved incident lists; incident detail; investigation progress; hypotheses; key signals; timeline; correlated code changes; stretch fix generation state where available.
+- **Incidents**: Active and resolved incident lists; investigation-start setting control; incident detail; investigation progress; hypotheses; key signals; timeline; correlated code changes; stretch fix generation state where available.
 - **Recommendations**: Active and archived recommendations; multi-step recommendation progress; PR review records; configuration change drawers; stretch generated PR drawers.
 - **Integrations**: GitHub, Datadog, and TrueFoundry connection state.
 
@@ -197,6 +197,7 @@ Requirements:
 - **UI-8**: All destructive or externally mutating actions must require explicit confirmation.
 - **UI-9**: Terminal failed jobs must expose a manual retry action when retrying is safe and idempotent.
 - **UI-10**: The incident investigation detail screen must automatically update progress phases, retry notes, hypotheses, evidence, and completion or failure state as the investigation job advances, without requiring a browser refresh or manual refresh action.
+- **UI-11**: The incident list view must expose the investigation-start setting with the three labels shown in the design: Manual, Automatic, and Let Instrument decide.
 
 ## 7. Durable Job and Progress Requirements
 
@@ -214,12 +215,13 @@ Job examples:
 Requirements:
 
 - **JOB-1**: Jobs must persist state so they survive browser refreshes, user navigation, backend restarts, and transient integration failures.
-- **JOB-2**: Jobs must expose progress phases suitable for the console, such as reading code, pulling traces, scanning logs, correlating commits, ranking hypotheses, drafting changes, running checks, and opening PRs.
+- **JOB-2**: Jobs must expose progress phases suitable for the console, such as reading code, pulling observability signals, scanning logs, correlating commits, ranking hypotheses, drafting changes, running checks, and opening PRs.
 - **JOB-3**: Job states must include at least `queued`, `running`, `retrying`, `failed`, `succeeded`, and `cancelled` where cancellation is supported.
 - **JOB-4**: Retryable external API failures must use bounded retries with backoff.
 - **JOB-5**: Jobs must be idempotent where practical, especially for webhook handling, PR comments, and generated recommendations.
 - **JOB-6**: Jobs must record enough audit information to explain what sources were consulted and what actions were taken.
 - **JOB-7**: The UI must be able to resume displaying a job from persisted state without re-running the job.
+- **JOB-8**: The server must expose current job progress, retry notes, completion, and failure state in a form the investigation detail screen can poll or subscribe to for live updates.
 
 ## 8. Evidence, Confidence, and AI Output Requirements
 
@@ -265,7 +267,7 @@ The MVP must include:
 - Datadog integration for receiving alert webhooks and reading monitor/log/metric context. Traces and dashboards are deferred past the first implementation.
 - TrueFoundry integration for reading MCP/LLM logs.
 - Incident creation, grouping, investigation, evidence display, and resolved incident history.
-- Investigation-start policy (`manual`/`automatic`/`smart`) with auto-started badges, and a live-updating investigation detail view.
+- Investigation-start setting (`manual`/`auto`/`smart`) with auto-started badges, and a live-updating investigation detail view.
 - Proactive recommendations for instrumentation and Datadog monitor improvements.
 - Recommendations archive with accepted, dismissed, and outdated states.
 - Durable job state for long-running work and retries.
@@ -315,12 +317,12 @@ Stretch functionality includes:
 - Given the root cause is upstream or otherwise not fixable through code, Instrument explains that no code fix can be generated and suggests a next step.
 - Given TrueFoundry logs contain an LLM/tool failure correlated by service, request ID, trace ID, or incident time window, Instrument can cite those logs as evidence in a hypothesis.
 - Given an investigation job reaches a terminal failed state, the console shows the failure and provides a manual retry action when the job is safe to retry.
-- Given the investigation-start policy is `manual`, a firing alert creates an incident that stays `new` until a human presses Investigate.
-- Given the policy is `automatic`, a firing alert's investigation starts on its own, and the incident shows a "Started automatically" badge in the list and detail.
-- Given the policy is `smart`, Instrument auto-starts the investigation for a clear-cut/important alert and leaves an ambiguous alert waiting for a human.
-- Given the policy is changed while an investigation is already running, that in-flight investigation is left undisturbed.
+- Given the investigation-start setting is `manual`, a firing alert creates an incident that stays `new` until a human presses Investigate.
+- Given the setting is `auto`, a firing alert's investigation starts on its own, and the incident shows a "Started automatically" badge in the list and detail.
+- Given the setting is `smart`, Instrument auto-starts the investigation for a clear-cut/important alert and leaves an ambiguous alert waiting for a human.
+- Given the setting is changed while an investigation is already running, that in-flight investigation is left undisturbed.
 - Given a user is viewing a running investigation's detail, its progress phases, hypotheses, evidence, and final result update in place without a manual refresh.
-- Given any policy (including `automatic` and `smart`), no investigation generates or applies a fix automatically; fix generation requires explicit human action.
+- Given any setting (including `auto` and `smart`), no investigation generates or applies a fix automatically; fix generation requires explicit human action.
 
 ### 13.5 Console Reliability
 
@@ -329,9 +331,3 @@ Stretch functionality includes:
 - Given an integration is disconnected or missing permissions, the console communicates the degraded state and avoids pretending analysis is complete.
 - Given an external write action is requested, the console asks for confirmation before taking the action.
 - Given the backend restarts during a running job, the console can recover persisted job state after the backend is available again.
-
-## 14. Resolved Decisions
-
-- GitHub commit history is the first deploy-correlation source for incidents. Deployment events from other systems may be added later as supplemental evidence.
-- The first Datadog implementation requires monitors, logs, and metrics. Traces and dashboards are not required for MVP.
-- Service ownership, criticality, and notification routing should be read from Datadog when present. If Datadog does not provide that metadata, Instrument should omit it rather than infer it or ask users to configure it separately.
