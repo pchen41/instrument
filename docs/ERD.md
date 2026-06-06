@@ -26,6 +26,9 @@ systems of record.
 - Datadog MCP server: https://docs.datadoghq.com/mcp_server/
 - Datadog MCP setup: https://docs.datadoghq.com/bits_ai/mcp_server/setup/
 - Datadog MCP tools: https://docs.datadoghq.com/mcp_server/tools/
+- Datadog webhooks: https://docs.datadoghq.com/integrations/webhooks/
+- GitHub webhook payloads: https://docs.github.com/en/webhooks/webhook-events-and-payloads
+- GitHub webhook signature validation: https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
 - InsForge CLI skill and local `AGENTS.md` instructions
 
 ## Research-Driven Integration Assumptions
@@ -55,9 +58,8 @@ systems of record.
   `create_datadog_monitor`.
 - Important Datadog MCP caveat: `create_datadog_monitor` creates a draft monitor
   that does not send notifications. The ERD supports draft and published states.
-  If the demo requires an actively notifying monitor created from Instrument, the
-  implementation must either publish through an approved Datadog API path after
-  explicit human approval or pre-provision/publish the demo monitor manually.
+  For the demo, accepted Datadog alert recommendations create draft monitors
+  only; publishing actively notifying monitors is future scope.
 - Datadog remains the source of truth for monitor state, alert state, logs,
   metrics, traces, service ownership, criticality, and notification routing.
 - GitHub remains the source of truth for repository, commit, branch, PR, review,
@@ -398,11 +400,12 @@ Cached PR metadata needed for dedupe and console records.
 | `title` | `text not null` | |
 | `author_login` | `text null` | |
 | `state` | `text not null` | `open`, `closed`, `merged`, etc. |
+| `draft` | `boolean not null default false` | From the GitHub PR object; relevant to `ready_for_review`. |
 | `base_branch` | `text not null` | |
 | `head_branch` | `text not null` | |
 | `head_sha` | `text not null` | |
 | `html_url` | `text null` | |
-| `opened_at`, `closed_at`, `merged_at` | `timestamptz null` | |
+| `opened_at`, `updated_at`, `closed_at`, `merged_at` | `timestamptz null` | |
 | `last_synced_at` | `timestamptz null` | |
 
 Unique: `(repository_id, external_pr_number)`.
@@ -423,6 +426,33 @@ Unique: `(repository_id, external_pr_number)`.
 | `raw` | `jsonb not null default '{}'` | Redacted GitHub payload. |
 
 Unique: `(repository_id, sha)`.
+
+### `github_push_events`
+
+Normalized GitHub `push` webhook data used to trigger primary-branch scans. The
+raw webhook stays in `inbound_webhooks.payload_redacted`; this table stores only
+the fields needed for idempotency, cooldowns, and scan scope.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `uuid pk` | |
+| `workspace_id` | `uuid fk workspaces.id` | |
+| `repository_id` | `uuid fk repositories.id` | |
+| `webhook_event_id` | `uuid fk inbound_webhooks.id` | |
+| `ref` | `text not null` | Example: `refs/heads/main`. |
+| `before_sha` | `text not null` | GitHub `before`. |
+| `after_sha` | `text not null` | GitHub `after`. |
+| `base_ref` | `text null` | GitHub `base_ref`, often null. |
+| `compare_url` | `text null` | GitHub `compare` URL. |
+| `created` | `boolean not null default false` | Whether the ref was created. |
+| `deleted` | `boolean not null default false` | Whether the ref was deleted. |
+| `forced` | `boolean not null default false` | Whether the push was forced. |
+| `pusher_name` | `text null` | From `pusher`. |
+| `commit_count` | `integer not null default 0` | Payload commits array length; GitHub caps the array. |
+| `head_commit_sha` | `text null` | From `head_commit.id` when present. |
+| `created_at` | `timestamptz not null` | |
+
+Unique: `(repository_id, before_sha, after_sha, ref)`.
 
 ### `github_pr_commits`
 
@@ -550,6 +580,7 @@ creating incidents or jobs.
 | `provider_correlation_key` | `text null` | Stable subject key such as Datadog alert/monitor transition key, separate from delivery ID. |
 | `auth_method` | `webhook_auth_method not null` | Chosen verification method. |
 | `signature_valid` | `boolean not null default false` | Must be true before processing. |
+| `headers_redacted` | `jsonb not null default '{}'` | Store delivery/event/signature header names and non-secret values. |
 | `payload_redacted` | `jsonb not null` | Preserve enough for replay/debug; no secrets. |
 | `received_at` | `timestamptz not null` | |
 | `processed_at` | `timestamptz null` | |
@@ -557,6 +588,9 @@ creating incidents or jobs.
 | `error_summary` | `text null` | |
 
 Unique: `(provider, external_delivery_id)`.
+For GitHub, `external_delivery_id` must come from `X-GitHub-Delivery`,
+`event_type` from `X-GitHub-Event`, and `auth_method` should be
+`github_signature` using `X-Hub-Signature-256`.
 For Datadog, define `external_delivery_id` during webhook setup from stable
 payload variables plus transition timestamp or last-updated timestamp, because
 Datadog webhooks do not provide a GitHub-style delivery UUID. Store the alert
@@ -674,6 +708,7 @@ Proactive repository/observability scans.
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `repository_id` | `uuid fk repositories.id` | |
 | `job_id` | `uuid fk jobs.id` | |
+| `github_push_event_id` | `uuid fk github_push_events.id null` | Source push event for primary-branch scans. |
 | `trigger_source` | `text not null` | `primary_branch_commit`, `cooldown`, `system_seed`. |
 | `trigger_commit_sha` | `text null` | |
 | `trigger_commit_range` | `jsonb null` | For GitHub `push` events on the primary branch. |
@@ -908,13 +943,31 @@ identity and alert correlation identity as the same thing.
 | `external_monitor_id` | `text null` | Present even before monitor cache is hydrated. |
 | `alert_correlation_key` | `text not null` | Stable key for updating the current incident. |
 | `alert_transition_key` | `text not null` | Alert key + transition/state timestamp for deduping retries. |
+| `event_id` | `text null` | Datadog `$ID` event ID when provided. |
+| `event_url` | `text null` | Datadog `$LINK` event URL when provided. |
+| `alert_title` | `text null` | Datadog `$EVENT_TITLE` or monitor title. |
+| `alert_message` | `text null` | Datadog `$TEXT_ONLY_MSG` or `$EVENT_MSG`. |
+| `alert_query` | `text null` | Monitor query if included in the custom payload. |
+| `alert_metric` | `text null` | Metric name/namespace if included. |
+| `alert_scope` | `text null` | Datadog alert scope/group, if included. |
+| `alert_transition` | `text not null` | Raw Datadog transition such as `Triggered`, `Recovered`, `No Data`, etc. |
 | `alert_state` | `alert_state not null` | |
 | `service_name` | `text null` | Raw or normalized service tag. |
 | `tags` | `jsonb not null default '{}'` | Redacted Datadog tags. |
-| `occurred_at` | `timestamptz not null` | Alert event time from Datadog. |
+| `occurred_at` | `timestamptz not null` | Alert event time from Datadog `$DATE`. |
+| `last_updated_at` | `timestamptz null` | Datadog `$LAST_UPDATED`, if provided. |
 | `raw_summary` | `jsonb not null default '{}'` | Redacted bounded snapshot. |
 
 Unique: `(workspace_id, alert_transition_key)`.
+Recommended Datadog custom payload fields: `alert_id` from `$ALERT_ID`,
+`alert_cycle_key` from `$ALERT_CYCLE_KEY`, `alert_transition` from
+`$ALERT_TRANSITION`, `event_id` from `$ID`, `event_url` from `$LINK`,
+`event_title` from `$EVENT_TITLE`, `event_msg` from `$TEXT_ONLY_MSG`,
+`event_type` from `$EVENT_TYPE`, `date` from `$DATE`, `last_updated` from
+`$LAST_UPDATED`, `tags` from `$TAGS`, and targeted tag values such as
+`$TAGS[service]`, `$TAGS[env]`, and `$TAGS[instrument_demo]`. Map
+`Triggered`, `Re-Triggered`, `Warn`, `Re-Warn`, `No Data`, `Re-No Data`, and
+`Renotify` to `alert_state = 'firing'`; map `Recovered` to `resolved`.
 
 ## Incidents and Investigations
 
@@ -1238,9 +1291,9 @@ Index: `(workspace_id, topic, visible_after desc)`.
 ## Traceability to PRD Requirements
 
 - PR observability review: `inbound_webhooks`, `github_pull_requests`,
-  `github_pr_files`, `pr_review_runs`, `pr_review_findings`,
-  `pr_review_comments`, `recommendations`, `external_write_actions`, and
-  `mcp_tool_invocations`.
+  `github_pr_files`, `github_push_events`, `pr_review_runs`,
+  `pr_review_findings`, `pr_review_comments`, `recommendations`,
+  `external_write_actions`, and `mcp_tool_invocations`.
 - Recommendation lifecycle and archive: `recommendations`,
   `recommendation_steps`, `recommendation_events`, `generated_pull_requests`,
   `generated_pr_file_changes`, and `generated_datadog_monitors`.
@@ -1300,6 +1353,7 @@ Index: `(workspace_id, topic, visible_after desc)`.
 - `recommendation_steps(recommendation_id, step_order)`.
 - `pr_review_findings(pull_request_id, semantic_fingerprint)` unique.
 - `pr_review_comments(finding_id)` partial unique where `status in ('posted','resolved')`.
+- `github_push_events(repository_id, before_sha, after_sha, ref)` unique.
 - `generated_pull_requests(github_pull_request_id)`.
 - `datadog_alert_events(workspace_id, alert_transition_key)` unique.
 - `incidents(workspace_id, incident_state, started_at desc)`.
@@ -1332,10 +1386,10 @@ The ERD assumes these are supplied outside the database:
   capable of reading repos/PRs/diffs and posting scoped PR review comments.
   If recommendation PR generation is enabled, credentials also need branch/file
   write and PR create permissions.
-- Datadog site, webhook secret/signature configuration, and Datadog MCP auth.
+- Datadog site, webhook shared-secret/custom-header configuration, and Datadog MCP auth.
   Datadog MCP needs `mcp_read` for reads and `mcp_write` plus resource-level
-  permissions for monitor creation. Direct Datadog API/app keys may be needed
-  if the demo must publish monitors that notify.
+  permissions for draft monitor creation. Publishing notifying monitors is not
+  in demo scope.
 - The Datadog webhook template must include fields sufficient to synthesize
   `external_delivery_id`, `alert_transition_key`, and `alert_correlation_key`.
 - Demo Datadog monitor(s) that trigger on Instrument/TrueFoundry retry/error
@@ -1344,11 +1398,83 @@ The ERD assumes these are supplied outside the database:
   environment, job ID or workflow ID, integration source, error/rate-limit code,
   and trace/request IDs.
 
+## Webhook Payload Alignment
+
+### GitHub
+
+The schema agrees with GitHub webhook delivery and payload structure:
+
+- Delivery headers map to `inbound_webhooks`: `X-GitHub-Delivery` to
+  `external_delivery_id`, `X-GitHub-Event` to `event_type`, and redacted
+  signature/hook headers to `headers_redacted`.
+- Signature verification uses `X-Hub-Signature-256` and sets
+  `auth_method = 'github_signature'` plus `signature_valid = true` before any
+  downstream row is created.
+- `pull_request` payloads map to `github_pull_requests` using payload `number`,
+  `pull_request` fields such as title/state/draft/base/head/URLs/timestamps,
+  and payload `repository` and `sender` metadata.
+- `pull_request` events for `opened`, `reopened`, `synchronize`, and
+  `ready_for_review` create `pr_review_runs`; `closed`/merged payloads update
+  generated PR and recommendation lifecycle.
+- `push` payloads map to `github_push_events` using `ref`, `before`, `after`,
+  `base_ref`, `compare`, `created`, `deleted`, `forced`, `pusher`,
+  `head_commit`, and the bounded `commits` array. Primary-branch push events
+  then create or suppress `scans` according to cooldown.
+
+### Datadog
+
+Datadog webhooks are template-driven rather than a fixed alert JSON envelope.
+The configured Datadog webhook payload must emit the fields Instrument needs.
+The ERD expects this minimum JSON contract:
+
+```json
+{
+  "alert_id": "$ALERT_ID",
+  "alert_cycle_key": "$ALERT_CYCLE_KEY",
+  "alert_transition": "$ALERT_TRANSITION",
+  "event_id": "$ID",
+  "event_url": "$LINK",
+  "event_title": "$EVENT_TITLE",
+  "event_msg": "$TEXT_ONLY_MSG",
+  "event_type": "$EVENT_TYPE",
+  "date": "$DATE",
+  "last_updated": "$LAST_UPDATED",
+  "tags": "$TAGS",
+  "service": "$TAGS[service]",
+  "env": "$TAGS[env]",
+  "instrument_demo": "$TAGS[instrument_demo]"
+}
+```
+
+Mapping rules:
+
+- `inbound_webhooks.external_delivery_id` is synthesized from
+  `alert_cycle_key`, `alert_transition`, and `date` or `last_updated`.
+- `inbound_webhooks.provider_correlation_key` and
+  `datadog_alert_events.alert_correlation_key` use `alert_cycle_key` when
+  present; otherwise fall back to monitor ID plus scope tags.
+- `datadog_alert_events.external_monitor_id` uses `alert_id`.
+- `datadog_alert_events.alert_transition_key` uses the synthesized transition
+  key and is unique per transition.
+- `datadog_alert_events.alert_state` maps Datadog recovery transitions to
+  `resolved`; all other demo-relevant alert transitions map to `firing`.
+- Datadog webhook authentication should use a shared secret/custom header or
+  Datadog OAuth auth method; record the chosen mechanism in `auth_method` and
+  only process rows with `signature_valid = true`.
+
 ## Implementation Notes for AI Agents
 
 - Start with migrations for enums, workspace/auth/integration tables, jobs, and
   evidence before implementing workflows.
 - Implement webhook ingestion idempotently before PR review or incident workers.
+- Subscribe GitHub to `pull_request` and `push` webhooks. Use
+  `X-GitHub-Delivery` for `external_delivery_id`, `X-GitHub-Event` for
+  `event_type`, and validate `X-Hub-Signature-256` before processing. PR review
+  analysis should handle at least `opened`, `reopened`, `synchronize`, and
+  `ready_for_review`; PR merge/close transitions should update recommendation
+  and generated PR lifecycle.
+- Configure Datadog webhook payload JSON explicitly with the variables listed in
+  `datadog_alert_events`; Datadog does not send a fixed alert JSON envelope.
 - Implement job workers with transactional leases or `for update skip locked`;
   a browser refresh should only read `jobs` and `job_phases`, never restart work.
 - For PR review, compute `semantic_fingerprint` from repository ID, PR number,
@@ -1365,24 +1491,25 @@ The ERD assumes these are supplied outside the database:
 - Treat Datadog ownership, criticality, and notification routing as optional
   facts. Null is correct when Datadog does not provide the metadata.
 - Treat incident fix PR generation shown in the prototype as future scope. This
-  ERD supports recommendation PR generation only for the demo.
+  ERD supports recommendation PR generation only for the demo; remove, hide, or
+  disable incident "Generate fix" actions in the demo UI.
 - Treat existing Datadog monitor edits as reviewable/manual recommendations for
   the demo. Creating new monitors is in scope; mutating existing monitors from
   Instrument is future scope unless the PRD changes.
+- Accepted Datadog alert recommendations create draft monitors only for the
+  demo. Store `generated_datadog_monitors.external_state = 'draft'` and surface
+  the Datadog monitor ID/link returned by MCP.
+- Use simple polling against `app_events`, jobs, and relevant detail endpoints
+  for the demo, initially around once per second while a user is viewing active
+  work. InsForge realtime can be added later if polling becomes noisy.
+- For generated PR audit, patch hashes/excerpts plus GitHub links are sufficient;
+  GitHub remains the source of truth for full diffs and commits.
 
 ## Open Questions for Product/Implementation
 
-- Should accepted Datadog alert recommendations create draft monitors only, or
-  publish notifying monitors after approval through direct Datadog API access?
 - Should TrueFoundry MCP calls use the Agent API `integration_fqn` flow or a
   lower-level MCP gateway invocation path? This affects exact auth fields and
   request IDs.
 - What exact deterministic rule should power smart investigation start in the
   reliability demo: configured tag, monitor name keyword, service name, or a
   combination?
-- Will live console updates use InsForge realtime, polling against `app_events`,
-  or a hybrid?
-- Should generated PR audit store full patches in the database/storage, or are
-  patch hashes/excerpts plus GitHub links sufficient for the demo?
-- Will the design remove incident "Generate fix" actions for the demo, or should
-  those actions be shown as disabled/future-scope UI?
