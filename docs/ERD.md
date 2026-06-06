@@ -22,6 +22,7 @@ systems of record.
 - TrueFoundry request logs API docs: https://www.truefoundry.com/docs/ai-gateway/fetch-request-logs
 - TrueFoundry AI Gateway quick start: https://www.truefoundry.com/docs/ai-gateway/quick-start
 - TrueFoundry Responses API docs: https://www.truefoundry.com/docs/ai-gateway/responses-api
+- TrueFoundry deploy MCP server from code docs: https://www.truefoundry.com/docs/mcp-server-deployment/deploy-mcp-server-from-code
 - GitHub MCP server: https://github.com/github/github-mcp-server
 - Datadog MCP server: https://docs.datadoghq.com/mcp_server/
 - Datadog MCP setup: https://docs.datadoghq.com/bits_ai/mcp_server/setup/
@@ -34,9 +35,10 @@ systems of record.
 ## Research-Driven Integration Assumptions
 
 - TrueFoundry MCP Gateway should be the app's governed MCP access layer for
-  GitHub MCP and Datadog MCP. Store only gateway/server identifiers, tool
-  invocations, redacted inputs, redacted summaries, and evidence references.
-  Do not store raw OAuth tokens or provider keys.
+  GitHub MCP, Datadog MCP, and an Instrument-owned TrueFoundry observability MCP
+  server. Store only gateway/server identifiers, tool invocations, redacted
+  inputs, redacted summaries, and evidence references. Do not store raw OAuth
+  tokens or provider keys.
 - TrueFoundry AI Gateway should be the only path for LLM calls. Store
   `response_id`, model/provider names, schema version, trace/span IDs, usage,
   latency, validation state, and redacted output summaries.
@@ -47,6 +49,11 @@ systems of record.
 - TrueFoundry request logs are fetched through the spans query API
   `POST /api/svc/v1/spans/query`. Persist relevant spans as evidence, keyed by
   trace/span/request IDs.
+- Deploy an Instrument-owned HTTP MCP server on TrueFoundry, preferably with
+  Python and FastMCP, to expose bounded read-only tools for TrueFoundry model
+  metrics, MCP metrics, request logs, and evidence-bundle lookup. Register that
+  server with TrueFoundry MCP Gateway and pass its `integration_fqn` to the
+  TrueFoundry Agent API along with GitHub and Datadog MCP servers.
 - GitHub MCP supports toolsets such as `repos`, `pull_requests`, `issues`,
   `git`, and tool-level controls. Relevant tools include repository/file reads,
   PR diff/file/review-comment reads, `add_comment_to_pending_review`,
@@ -85,6 +92,40 @@ systems of record.
   summaries, and configuration diffs where external schemas are too unstable for
   first-pass normalized columns.
 
+## Implementation Architecture
+
+- Frontend: Vite React TypeScript SPA using Tailwind CSS 3.4, `@insforge/sdk`,
+  and `lucide-react`. Deploy through InsForge frontend deployments.
+- Backend/data plane: InsForge Postgres, Auth, RLS, Edge Functions, schedules,
+  and server-side secrets. Browser code uses the InsForge anon key with RLS;
+  webhook handlers, job workers, and external write executors use server-only
+  InsForge credentials.
+- Primary server functions: GitHub webhook ingestion, Datadog webhook ingestion,
+  job worker/dispatcher, external action executor, and UI read APIs for
+  dashboard/detail views.
+- LLM orchestration: TrueFoundry Agent API for tool-using workflows. Attach
+  GitHub MCP, Datadog MCP, and Instrument observability MCP servers by
+  `integration_fqn` with explicit tool allowlists and bounded iteration limits.
+  For the Instrument observability MCP server, pass run context such as
+  `job_id`, `ai_model_call_id`, workspace, environment, and trace hints as
+  explicit tool arguments whenever the tool needs that context. Do not rely on
+  Agent API MCP headers for per-run metadata unless TrueFoundry confirms header
+  forwarding semantics. Set `x-tfy-metadata` on Agent API requests for gateway
+  routing, metrics, logs, and filtering only; it is not expected to propagate to
+  MCP servers. Use TrueFoundry Responses API only for non-tool structured calls.
+- Custom MCP service: deploy an Instrument-owned HTTP MCP server on TrueFoundry,
+  preferably Python + FastMCP. Register it with TrueFoundry MCP Gateway and
+  expose only bounded read-only tools for TrueFoundry model metrics, MCP
+  metrics, request logs, trace spans, and existing evidence bundles.
+- External systems of record: GitHub remains authoritative for repos, commits,
+  PRs, review comments, and generated PRs. Datadog remains authoritative for
+  monitors, logs, metrics, traces, incidents, and alert state. TrueFoundry
+  remains authoritative for gateway traces, model/MCP metrics, request logs, and
+  deployed MCP service status.
+- UI updates: start with simple polling against app read endpoints and
+  `app_events`, roughly once per second while active work is visible. Add
+  InsForge realtime only if polling becomes too noisy.
+
 ## Conceptual ERD
 
 ```mermaid
@@ -120,7 +161,10 @@ erDiagram
   JOBS ||--o{ JOB_AUDIT_EVENTS : audits
   JOBS ||--o{ MCP_TOOL_INVOCATIONS : calls
   JOBS ||--o{ AI_MODEL_CALLS : prompts
+  AI_MODEL_CALLS ||--o{ MCP_TOOL_INVOCATIONS : selects
   JOBS ||--o{ EXTERNAL_WRITE_ACTIONS : performs
+  MCP_TOOL_INVOCATIONS ||--o{ TRUEFOUNDRY_METRIC_QUERIES : fetches
+  MCP_TOOL_INVOCATIONS ||--o{ TRUEFOUNDRY_SPANS : fetches
 
   REPOSITORIES ||--o{ SCANS : scanned_by
   JOBS ||--o{ SCANS : backs
@@ -162,6 +206,7 @@ erDiagram
 - `integration_provider`: `github`, `datadog`, `truefoundry`
 - `integration_status`: `connected`, `disconnected`, `degraded`,
   `rate_limited`, `missing_credentials`
+- `mcp_server_role`: `external_provider`, `instrument_observability`
 - `investigation_start_mode`: `manual`, `auto`, `smart`
 - `job_type`: `github_pr_review_analysis`, `proactive_scan`,
   `recommendation_generation`, `datadog_monitor_analysis`,
@@ -232,7 +277,7 @@ Primary key: `(workspace_id, user_id)`.
 | `workspace_id` | `uuid pk fk workspaces.id` | |
 | `investigation_start_mode` | `investigation_start_mode not null default 'manual'` | UI labels: Manual, Automatic, Let Instrument decide. |
 | `smart_start_rules` | `jsonb not null default '{}'` | Optional deterministic keyword/tag rule if smart auto-start needs stricter demo behavior later. |
-| `primary_branch_scan_cooldown_seconds` | `integer not null default 900` | Cooldown for proactive scans. |
+| `primary_branch_scan_cooldown_seconds` | `integer not null default 30` | Short demo cooldown for coalescing primary-branch proactive scans. |
 | `pr_review_enabled` | `boolean not null default true` | Enables automatic scoped PR comments. |
 | `updated_by` | `uuid fk auth.users.id null` | |
 | `updated_at` | `timestamptz not null` | |
@@ -277,40 +322,74 @@ Historical connection health.
 ### `mcp_servers`
 
 Configured MCP servers as seen through TrueFoundry MCP Gateway.
-There are two supported ways an implementation may reference a TrueFoundry-
-registered MCP server:
-
-- Direct MCP client path: call the copied MCP server URL, typically
-  `https://<control-plane-url>/api/llm/mcp/<integration-id>/server`, with a
-  TrueFoundry gateway token in `Authorization`. This is the default path for
-  Instrument's app code.
-- Agent API path: reference the registered server by its `integration_fqn`
-  inside the Agent API request. This is useful when TrueFoundry orchestrates
-  tool calls for an agent request rather than the app opening an MCP client
-  connection itself. This ERD stores it as optional compatibility metadata.
+Instrument's tool-using LLM workflows call the TrueFoundry Agent API. For
+registered MCP servers, pass `integration_fqn` entries in the Agent API
+`mcp_servers` array with `enable_all_tools = false` and an explicit tool
+allowlist. Register three MCP servers for the demo: GitHub MCP, Datadog MCP,
+and the Instrument-owned TrueFoundry observability MCP server. Keep the copied
+MCP server URL for diagnostics and any deterministic direct MCP client calls.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | `uuid pk` | |
 | `workspace_id` | `uuid fk workspaces.id` | |
-| `integration_id` | `uuid fk integrations.id` | GitHub or Datadog provider integration. |
+| `integration_id` | `uuid fk integrations.id` | Provider integration exposed through this MCP server: GitHub, Datadog, or TrueFoundry for the Instrument observability MCP server. |
 | `gateway_integration_id` | `uuid fk integrations.id` | TrueFoundry integration used as the MCP gateway. |
-| `mcp_server_url` | `text not null` | Copied TrueFoundry MCP server URL for direct MCP client calls. |
+| `server_role` | `mcp_server_role not null default 'external_provider'` | `instrument_observability` for the custom TrueFoundry metrics/logs MCP server. |
+| `integration_fqn` | `text not null` | TrueFoundry registered MCP server FQN used in Agent API `mcp_servers` entries. |
+| `mcp_server_url` | `text null` | Copied TrueFoundry MCP server URL for diagnostics or direct MCP client calls. |
 | `gateway_server_name` | `text not null` | Human-readable TrueFoundry registered MCP server name from the gateway UI; useful for display and diagnostics, not necessarily callable by itself. |
 | `gateway_integration_id_value` | `text null` | URL path identifier in `/api/llm/mcp/<integration-id>/server`, when known. This is the identifier embedded in `mcp_server_url`. |
-| `integration_fqn` | `text null` | Optional full FQN for TrueFoundry Agent API requests, for example `truefoundry:mcp-server-group:...:mcp-server:...`. Not required when using `mcp_server_url` directly. |
-| `provider_server_name` | `text not null` | Example: `github`, `datadog`. |
+| `provider_server_name` | `text not null` | Example: `github`, `datadog`, `instrument_truefoundry_observability`. |
 | `transport` | `text not null` | Usually `streamable_http` through gateway. |
 | `inbound_auth_mode` | `text null` | TrueFoundry gateway auth mode: `PAT`, `VAT`, IdP token, etc. |
 | `outbound_auth_mode` | `text null` | Provider auth mode configured in the gateway. |
-| `toolsets` | `text[] not null default '{}'` | GitHub: `repos`, `pull_requests`, `git`; Datadog: `core`, `alerting`, `apm`. |
-| `enabled_tools` | `text[] null` | Optional tighter allowlist. |
+| `toolsets` | `text[] not null default '{}'` | GitHub: `repos`, `pull_requests`, `git`; Datadog: `core`, `alerting`, `apm`; Instrument: `truefoundry_observability`. |
+| `enabled_tools` | `text[] null` | Explicit Agent API allowlist. Instrument tools should include only bounded read-only metric/log/evidence tools. |
 | `write_tools_enabled` | `boolean not null default false` | True only when governance allows provider writes. |
 | `status` | `integration_status not null` | |
 | `last_discovered_at` | `timestamptz null` | Last successful tool discovery. |
 | `created_at`, `updated_at` | `timestamptz` | |
 
+Unique: `(workspace_id, integration_fqn)`.
 Unique: `(workspace_id, gateway_server_name)`.
+
+Instrument observability MCP server tool contract:
+
+- `query_truefoundry_model_metrics`: read-only; accepts approved time window,
+  job/workflow IDs, provider/model filters, and aggregation template names.
+- `query_truefoundry_mcp_metrics`: read-only; accepts approved time window,
+  MCP server/tool filters, job/workflow IDs, and aggregation template names.
+- `search_truefoundry_request_logs`: read-only; accepts approved time window,
+  trace/request/job IDs, error/rate-limit filters, and bounded result limits.
+- `get_truefoundry_trace_spans`: read-only; accepts trace ID plus optional span
+  type/name filters.
+- `get_instrument_evidence_bundle`: read-only; accepts job, incident,
+  recommendation, or evidence IDs and returns compact evidence summaries.
+
+Each Instrument observability tool must enforce allowlisted query templates,
+bounded time windows, redaction, and result-size limits. Tools should only
+return compact structured results; they should not write to InsForge directly.
+The Agent API caller/job worker consumes streamed tool call and tool result
+events, then persists `mcp_tool_invocations`, `truefoundry_metric_queries`,
+`truefoundry_spans`, and `evidence_items`. Pass job and agent-context
+identifiers to the custom MCP server as explicit tool arguments. Headers such as
+`mcp_servers[].headers` or `x-tfy-mcp-headers` may be used for authentication or
+future confirmed pass-through behavior, but the demo should not depend on them
+for metadata propagation. If context is unavailable, correlate with
+TrueFoundry trace/request IDs and the enclosing `ai_model_calls` row.
+
+Starter query templates for the demo:
+
+- `last_15m_by_job`: model/MCP errors, retries, latency, and request counts
+  filtered by Instrument job/workflow metadata.
+- `last_1h_by_trace`: request logs and spans around a known trace or request ID.
+- `mcp_tool_latency_by_server`: p95/p99 latency and error count grouped by MCP
+  server and tool name.
+- `model_errors_by_provider`: model error/rate-limit counts grouped by provider
+  and model.
+- `request_logs_for_trace`: bounded request-log excerpts for a trace/request
+  identifier.
 
 ### `mcp_tool_invocations`
 
@@ -322,6 +401,9 @@ Audit and evidence spine for MCP calls via TrueFoundry Gateway.
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `mcp_server_id` | `uuid fk mcp_servers.id` | |
 | `job_id` | `uuid fk jobs.id null` | Null only for health checks. |
+| `ai_model_call_id` | `uuid fk ai_model_calls.id null` | Set for tools selected during a TrueFoundry Agent API call. |
+| `agent_tool_call_id` | `text null` | Optional streamed Agent API tool call ID when present; do not rely on this being provided by the API. |
+| `agent_stream_event_index` | `integer null` | Fallback sequence number assigned by the job worker while parsing the Agent API stream. |
 | `tool_name` | `text not null` | Exact MCP tool name. |
 | `purpose` | `text not null` | Example: `pr_diff_read`, `monitor_coverage`, `post_review_comment`. |
 | `idempotency_key` | `text null` | Required for external writes. |
@@ -1159,7 +1241,8 @@ Unique: `(evidence_id, subject_type, subject_id, claim_type)`.
 
 ### `ai_model_calls`
 
-LLM calls through TrueFoundry AI Gateway only.
+LLM calls through TrueFoundry AI Gateway only. Tool-using calls should use the
+TrueFoundry Agent API; non-tool structured calls may use the Responses API.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -1168,12 +1251,15 @@ LLM calls through TrueFoundry AI Gateway only.
 | `integration_id` | `uuid fk integrations.id` | TrueFoundry integration. |
 | `job_id` | `uuid fk jobs.id` | |
 | `purpose` | `text not null` | `recommendation_schema`, `incident_hypotheses`, `pr_comment_draft`, etc. |
-| `truefoundry_response_id` | `text null` | Responses API ID. |
+| `api_surface` | `text not null` | `agent_chat_completions` or `responses`. |
+| `truefoundry_response_id` | `text null` | TrueFoundry response/chat completion ID when returned. |
 | `truefoundry_trace_id` | `text null` | |
 | `truefoundry_span_id` | `text null` | |
 | `gateway_base_url_name` | `text null` | Non-secret label, not raw secret. |
 | `provider_name` | `text null` | `x-tfy-provider-name` value. |
 | `model_name` | `text not null` | TrueFoundry model name. |
+| `agent_iteration_limit` | `integer null` | Set for Agent API calls to bound tool loops. |
+| `mcp_servers_requested` | `jsonb null` | Redacted Agent API `mcp_servers` request entries: FQNs, enabled tool names, no secrets. |
 | `request_schema_version` | `text not null` | |
 | `output_schema_version` | `text not null` | |
 | `input_hash` | `text not null` | Avoid storing large prompts. |
@@ -1196,6 +1282,8 @@ Stores model/MCP metric API snapshots used by the app.
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `integration_id` | `uuid fk integrations.id` | TrueFoundry integration. |
 | `job_id` | `uuid fk jobs.id null` | |
+| `mcp_tool_invocation_id` | `uuid fk mcp_tool_invocations.id null` | Set when fetched through the Instrument observability MCP server. |
+| `query_template_name` | `text null` | Approved internal template used by the MCP tool or worker. |
 | `datasource` | `text not null` | `modelMetrics` or `mcpMetrics`. |
 | `query_type` | `text not null` | `distribution` or `timeseries`. |
 | `start_ts`, `end_ts` | `timestamptz not null` | |
@@ -1216,6 +1304,8 @@ Normalized pointer to spans fetched from TrueFoundry request logs.
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `integration_id` | `uuid fk integrations.id` | TrueFoundry integration. |
 | `job_id` | `uuid fk jobs.id null` | |
+| `mcp_tool_invocation_id` | `uuid fk mcp_tool_invocations.id null` | Set when fetched through the Instrument observability MCP server. |
+| `query_template_name` | `text null` | Approved internal template used by the MCP tool or worker. |
 | `trace_id` | `text not null` | |
 | `span_id` | `text not null` | |
 | `parent_span_id` | `text null` | |
@@ -1392,10 +1482,14 @@ The ERD assumes these are supplied outside the database:
 - TrueFoundry account/tenant, control plane URL, gateway base URL, and an
   application-appropriate API key, preferably a VAT for deployed app code.
 - TrueFoundry model provider account(s), model name(s), and
-  `x-tfy-provider-name` value for Responses API calls.
-- TrueFoundry MCP Gateway registration for GitHub MCP and Datadog MCP, with
-  copied MCP server URLs, allowed toolsets, and write-tool governance/approval
-  policies.
+  `x-tfy-provider-name` value for AI Gateway calls.
+- TrueFoundry deployment for the Instrument observability MCP server, preferably
+  an HTTP Python/FastMCP service, with server-side secrets for TrueFoundry metric
+  and request-log APIs. It returns tool results only; it does not need an
+  InsForge service credential.
+- TrueFoundry MCP Gateway registration for GitHub MCP, Datadog MCP, and the
+  Instrument observability MCP server, with copied MCP server FQNs, copied MCP
+  server URLs, allowed toolsets, and write-tool governance/approval policies.
 - GitHub repository allowlist, webhook secret, and token/OAuth credentials
   capable of reading repos/PRs/diffs and posting scoped PR review comments.
   If recommendation PR generation is enabled, credentials also need branch/file
@@ -1487,6 +1581,11 @@ Mapping rules:
   analysis should handle at least `opened`, `reopened`, `synchronize`, and
   `ready_for_review`; PR merge/close transitions should update recommendation
   and generated PR lifecycle.
+- For `push` events to the repository's primary branch, record every delivery
+  and enqueue a proactive scan for the latest commit SHA. Use a short cooldown
+  plus coalescing: if a scan is running or a scan was queued/completed very
+  recently, mark a pending coalesced scan and run one follow-up scan for the
+  newest `after` SHA when the active scan finishes.
 - Configure Datadog webhook payload JSON explicitly with the variables listed in
   `datadog_alert_events`; Datadog does not send a fixed alert JSON envelope.
 - Implement job workers with transactional leases or `for update skip locked`;
@@ -1522,3 +1621,17 @@ Mapping rules:
   alert copy and configured monitor semantics rather than a deterministic
   keyword/tag rule. If the demo needs stricter behavior later, add a simple
   Datadog tag or keyword rule into `workspace_settings.smart_start_rules`.
+- TrueFoundry model metrics, MCP metrics, and request logs are exposed to the
+  Agent API through the Instrument observability MCP server. The MCP tools call
+  TrueFoundry HTTP APIs internally, enforce approved query templates and bounded
+  time windows, and return compact structured results. The Agent API caller/job
+  worker parses streamed tool call/result events and persists
+  `mcp_tool_invocations`, `truefoundry_metric_queries`, `truefoundry_spans`, and
+  `evidence_items` after the call. Server-side jobs may still prefetch the same
+  tables for deterministic workflows, but tool-using investigations should
+  prefer the custom MCP server.
+- When parsing Agent API streams, store documented IDs when present but do not
+  require `tool_call_id` or similar fields. The persistence fallback is the
+  enclosing `job_id`, `ai_model_call_id`, MCP server FQN/tool name, stream event
+  order, TrueFoundry trace/request IDs, and redacted tool arguments/result
+  hashes.

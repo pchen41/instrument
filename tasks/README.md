@@ -1,2 +1,3 @@
-Tasks should be a reasonable-sized self-contained unit of work that is testable, both in an automated and manual way. Remember to write tests when implementing them.
-Task files contain requirements, acceptance criteria and are modified to include any progress or notes.
+Tasks should be reasonable-sized self-contained units of work that make incremental progress toward the final result and are testable both in an automated and manual way. Remember to write tests when implementing them.
+Task files contain requirements, acceptance criteria and are modified to include any progress or notes so that future agents can take over.
+When working on tasks, remember to commit regularly (probably after every task, but maybe multiple times per task if appropriate).
