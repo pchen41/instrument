@@ -14,21 +14,30 @@ induced failure, and eventually completes the original PR generation.
 Depends on Tasks 5A, 5B, 5C, 5D, 7, 8, 10, and 11. It may require external
 provisioning listed in `docs/ERD.md`. The MCP foundation should already exist
 from Task 5C; this task validates and hardens the reliability proof instead of
-introducing MCP for the first time.
+introducing MCP for the first time. If Task 5C used the demo path, expect the
+Instrument observability MCP server to be a small Render-hosted Python/FastMCP
+service registered manually in TrueFoundry MCP Gateway. This task may harden
+that server, but should not replace it with a larger architecture unless the
+demo path blocks the validation workflow.
 
 ## Requirements
 
 - Verify and, if needed, harden the Instrument-owned TrueFoundry observability
-  MCP server from Task 5C with bounded read-only tools:
+  MCP server from Task 5C, including its Render deployment, TrueFoundry Gateway
+  registration, shared-header/bearer auth, and bounded read-only tools:
   - `query_truefoundry_model_metrics`
   - `query_truefoundry_mcp_metrics`
   - `search_truefoundry_request_logs`
   - `get_truefoundry_trace_spans`
   - `get_instrument_evidence_bundle`
-- Enforce allowlisted query templates, bounded time windows, redaction, and result-size limits in the MCP server.
+- Enforce bounded time windows, result-size limits, redaction, and simple
+  allowlisted query shapes in the MCP server. Add stricter query templates only
+  where the demo evidence path proves they are needed.
 - Verify GitHub MCP, Datadog MCP, and Instrument observability MCP registrations
   from Task 5C, including stored non-secret FQNs, URLs, allowed tools, and health
   in `integrations.config`.
+- Keep production OAuth, token passthrough, and automated MCP registration out of
+  scope unless the demo cannot run safely with the Task 5C shared-secret setup.
 - Ensure LLM/tool workflows use TrueFoundry AI Gateway or Agent API and persist
   streamed tool-call summaries in `ai_model_calls.tool_calls_redacted`, with
   cited outputs in `evidence_items`.
@@ -68,8 +77,9 @@ introducing MCP for the first time.
 - After the simulated/manual rate-limit fix control is cleared, allow the
   original recommendation PR generation job to complete in the background.
 - Add seed/reset tooling so the full path can be rehearsed repeatedly.
-- Add final validation-path documentation with setup, env vars/secrets,
-  fixtures, and a step-by-step runbook.
+- Add final validation-path documentation with setup, Render env var names,
+  TrueFoundry MCP FQN/URL values, fixtures, and a step-by-step runbook. Record
+  secret names only, never secret values.
 
 ## Acceptance Criteria
 

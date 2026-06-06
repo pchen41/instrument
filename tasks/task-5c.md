@@ -10,6 +10,11 @@ Later workflow tasks use TrueFoundry AI Gateway or Agent API for AI calls and
 TrueFoundry MCP Gateway for governed access to GitHub, Datadog, and
 Instrument-owned observability tools. This task establishes that shared
 foundation without implementing task-specific prompts or provider workflows.
+For the demo, keep the Instrument-owned observability MCP server deliberately
+small: host it on Render as a Python/FastMCP Streamable HTTP service, protect it
+with a shared bearer/header secret, and register it manually in TrueFoundry MCP
+Gateway. Production OAuth, token passthrough, automated registration, and richer
+tool governance are deferred until after the validation path is proven.
 
 Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
 
@@ -33,8 +38,17 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
 - Store MCP server FQNs, server URLs, allowed toolsets, and health state in
   `integrations.config` without storing secrets.
 - Implement or deploy a minimal Instrument-owned TrueFoundry observability MCP
-  server with bounded read-only tools for model metrics, MCP metrics, request
-  logs/spans, and existing evidence bundles.
+  server as a Render-hosted Python/FastMCP web service with `/mcp` and
+  `/healthz`. The demo service should expose bounded read-only tools for model
+  metrics, MCP metrics, request logs/spans, and a health check. Existing
+  evidence-bundle lookup may be a clear stub until server-backed evidence APIs
+  exist.
+- Add a minimal Render deployment shape, such as `render.yaml` plus
+  `requirements.txt`, using Render env vars for TrueFoundry credentials and the
+  demo MCP bearer/header token. Do not commit secret values.
+- Register the Render `/mcp` URL in TrueFoundry MCP Gateway manually for the
+  demo. Capture only the non-secret FQN, proxy/server URL, health status, and
+  allowed tools in app config or task notes.
 - The Instrument observability MCP server can start minimal here and be expanded
   in Task 12, but its FQN and health should be known before incident
   investigation work starts.
@@ -48,6 +62,9 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
 - GitHub MCP, Datadog MCP, and the minimal Instrument observability MCP server
   have non-secret registration/config stored in `integrations.config`, or the
   corresponding integration is explicitly marked degraded/missing credentials.
+- The Render-hosted Instrument observability MCP server responds on `/healthz`
+  and can serve at least one bounded TrueFoundry-backed tool call through
+  TrueFoundry MCP Gateway.
 - No provider tokens, TrueFoundry PAT/VAT values, MCP credentials, or InsForge
   admin keys are stored in relational columns or browser-visible env vars.
 - Downstream tasks have a documented helper/API surface for model calls, tool
@@ -63,6 +80,8 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
   external posting.
 - Add MCP config tests for FQNs, tool allowlists, and secret-free integration
   config.
+- Add focused tests for the demo MCP server's bounds, redaction, and mocked
+  TrueFoundry HTTP calls. Do not build production OAuth tests in this task.
 
 ## Manual Verification
 
@@ -70,10 +89,12 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
 - Confirm `ai_model_calls` and cited `evidence_items` are written.
 - Confirm MCP FQNs/tool allowlists are visible in non-secret integration config,
   or integration state explains what is missing.
-- Confirm the Instrument observability MCP server can answer a bounded health or
-  evidence-bundle request.
+- Confirm the Render-hosted Instrument observability MCP server answers
+  `/healthz`, appears healthy in TrueFoundry MCP Gateway, and can answer a
+  bounded metric/log request.
 
 ## Progress Notes
 
-- Update this section with helper locations, schema versions, MCP registration
-  notes, Instrument observability MCP server location, and any provider caveats.
+- Update this section with helper locations, schema versions, Render service
+  name/URL, MCP registration notes, Instrument observability MCP server
+  location, and any provider caveats. Record secret names only, never values.

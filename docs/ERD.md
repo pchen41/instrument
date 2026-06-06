@@ -18,6 +18,8 @@ GitHub, Datadog, or TrueFoundry as local systems of record.
 - TrueFoundry AI Gateway quick start: https://www.truefoundry.com/docs/ai-gateway/quick-start
 - TrueFoundry Responses API docs: https://www.truefoundry.com/docs/ai-gateway/responses-api
 - TrueFoundry deploy MCP server from code docs: https://www.truefoundry.com/docs/mcp-server-deployment/deploy-mcp-server-from-code
+- Render remote MCP server hosting guide: https://render.com/articles/building-and-hosting-mcp-servers-a-complete-guide
+- Render Blueprint docs: https://render.com/docs/blueprint-spec
 - GitHub MCP server: https://github.com/github/github-mcp-server
 - Datadog MCP server: https://docs.datadoghq.com/mcp_server/
 - Datadog MCP setup: https://docs.datadoghq.com/bits_ai/mcp_server/setup/
@@ -52,11 +54,14 @@ GitHub, Datadog, or TrueFoundry as local systems of record.
 - TrueFoundry request logs are fetched through the spans query API
   `POST /api/svc/v1/spans/query`. Persist relevant spans as evidence snapshots,
   keyed by trace/span/request IDs.
-- Deploy an Instrument-owned HTTP MCP server on TrueFoundry, preferably with
-  Python and FastMCP, to expose bounded read-only tools for TrueFoundry model
-  metrics, MCP metrics, request logs, and evidence-bundle lookup. Register that
-  server with TrueFoundry MCP Gateway and pass its `integration_fqn` to the
-  TrueFoundry Agent API along with GitHub and Datadog MCP servers.
+- For the first demo, deploy an Instrument-owned HTTP MCP server as a small
+  Render web service using Python and FastMCP. Expose a Streamable HTTP `/mcp`
+  endpoint and a simple `/healthz` endpoint, then register the Render URL with
+  TrueFoundry MCP Gateway. The server should expose only bounded read-only tools
+  for TrueFoundry model metrics, MCP metrics, request logs, and trace lookup;
+  evidence-bundle lookup may start as a stub until the app evidence API exists.
+  Pass the registered `integration_fqn` to the TrueFoundry Agent API along with
+  GitHub and Datadog MCP servers.
 - GitHub MCP supports toolsets such as `repos`, `pull_requests`, `issues`,
   `git`, and tool-level controls. Relevant tools include repository/file reads,
   PR diff/file/review-comment reads, `add_comment_to_pending_review`,
@@ -164,10 +169,15 @@ GitHub, Datadog, or TrueFoundry as local systems of record.
   forwarding semantics. Set `x-tfy-metadata` on Agent API requests for gateway
   routing, metrics, logs, and filtering only; it is not expected to propagate to
   MCP servers. Use TrueFoundry Responses API only for non-tool structured calls.
-- Custom MCP service: deploy an Instrument-owned HTTP MCP server on TrueFoundry,
-  preferably Python + FastMCP. Register it with TrueFoundry MCP Gateway and
-  expose only bounded read-only tools for TrueFoundry model metrics, MCP
-  metrics, request logs, trace spans, and existing evidence bundles.
+- Custom MCP service: for the demo, deploy an Instrument-owned HTTP MCP server
+  on Render as a Python + FastMCP web service. Register its public `/mcp` URL
+  with TrueFoundry MCP Gateway using shared-header or bearer-token auth managed
+  through Render environment variables and TrueFoundry Gateway configuration.
+  Keep the first version intentionally small: health, model metrics, MCP
+  metrics, request-log search, trace-span lookup when needed, and an optional
+  evidence-bundle stub until server-backed evidence is available. Production
+  OAuth, token passthrough, automated registration, and richer tool governance
+  are later hardening, not required for the demo.
 - External systems of record: GitHub remains authoritative for repos, commits,
   PRs, review comments, and generated PRs. Datadog remains authoritative for
   monitors, logs, metrics, traces, incidents, and alert state. TrueFoundry
@@ -880,18 +890,21 @@ The ERD assumes these are supplied outside the database:
   application-appropriate API key, preferably a VAT for deployed app code.
 - TrueFoundry model provider account(s), model name(s), and
   `x-tfy-provider-name` value for AI Gateway calls.
-- TrueFoundry deployment for the Instrument observability MCP server, preferably
-  an HTTP Python/FastMCP service, with server-side secrets for TrueFoundry metric
-  and request-log APIs. It returns tool results only; it does not need an
-  InsForge service credential. This should be available before incident
-  investigation is implemented, not deferred to the final reliability demo.
+- Render deployment for the Instrument observability MCP server: a small HTTP
+  Python/FastMCP web service with `/mcp` and `/healthz`, plus Render server-side
+  env vars for TrueFoundry metric/request-log API access and the demo MCP bearer
+  token. It returns tool results only; it does not need an InsForge service
+  credential. This should be available before incident investigation is
+  implemented, not deferred to the final reliability demo.
 - TrueFoundry MCP Gateway registration for GitHub MCP, Datadog MCP, and the
   Instrument observability MCP server, with copied MCP server FQNs, copied MCP
   server URLs, allowed toolsets, and write-tool governance/approval policies.
   Store these non-secret values in `integrations.config`. GitHub and Datadog MCP
   registration should be completed before PR review and monitor analysis work
   begins; the Instrument observability MCP server can start as a minimal bounded
-  read-only service and be hardened during investigation/reliability tasks.
+  read-only Render service and be hardened during investigation/reliability
+  tasks. For the demo, manual gateway registration through the TrueFoundry UI is
+  acceptable; automation can wait until after the validation path is proven.
 - GitHub repository allowlist, webhook secret, and token/OAuth credentials
   capable of reading repos/PRs/diffs and posting scoped PR review comments.
   If recommendation PR generation is enabled, credentials also need branch/file
@@ -1046,13 +1059,14 @@ Mapping rules:
   keyword rule into `workspaces.smart_start_rules`.
 - TrueFoundry model metrics, MCP metrics, and request logs are exposed to the
   Agent API through the Instrument observability MCP server. The MCP tools call
-  TrueFoundry HTTP APIs internally, enforce approved query templates and bounded
-  time windows, and return compact structured results. The Agent API caller/job
-  worker parses streamed tool call/result events, stores bounded summaries in
-  `ai_model_calls.tool_calls_redacted`, and persists cited metric/log/span
-  snapshots as `evidence_items` after the call. Server-side jobs may still
-  prefetch evidence for deterministic workflows, but tool-using investigations
-  should prefer the custom MCP server.
+  TrueFoundry HTTP APIs internally, enforce bounded time windows, result limits,
+  basic allowlisted query shapes, and redaction, then return compact structured
+  results. For the demo, avoid complex template systems unless a tool needs
+  them. The Agent API caller/job worker parses streamed tool call/result events,
+  stores bounded summaries in `ai_model_calls.tool_calls_redacted`, and persists
+  cited metric/log/span snapshots as `evidence_items` after the call. Server-side
+  jobs may still prefetch evidence for deterministic workflows, but tool-using
+  investigations should prefer the custom MCP server.
 - When parsing Agent API streams, store documented IDs when present but do not
   require `tool_call_id` or similar fields. The persistence fallback is the
   enclosing `job_id`, `ai_model_call_id`, MCP server FQN/tool name, stream event

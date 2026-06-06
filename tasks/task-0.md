@@ -39,9 +39,13 @@ Read `AGENTS.md`, `docs/PRD.md`, and `docs/ERD.md` before starting. Use the
 - Verify whether GitHub MCP and Datadog MCP registrations already exist in the
   TrueFoundry MCP Gateway. If they do not, document what Task 5C must create or
   configure.
+- Document the demo hosting plan for the Instrument observability MCP server:
+  Render web service, `/mcp` URL, `/healthz` URL, shared bearer/header auth
+  secret name, and manual TrueFoundry MCP Gateway registration. Record only
+  non-secret names, URLs, FQNs, and redacted readiness status.
 - Document local development constraints, including webhook tunnel requirements
-  and whether the Instrument observability MCP server will need a tunnel before
-  deployment.
+  and whether the Instrument observability MCP server needs a tunnel before the
+  Render deployment is available.
 
 ## Acceptance Criteria
 
