@@ -20,3 +20,7 @@ The design medium is **HTML/CSS/JS** — these are prototypes, not production co
 
 - `design/README.md` — this file
 - `design/project/` — the `Instrument` project files (HTML prototypes, assets, components)
+
+## Iconography
+
+Instrument uses Phosphor-style icons. The prototype ships a self-contained inline SVG icon layer at `design/project/assets/icons.js` with friendly names and internal `ph-*` keys so the exported HTML works without a build step. When implementing the production React app, use `@phosphor-icons/react` and match the prototype's icon choices, weight, and sizing.

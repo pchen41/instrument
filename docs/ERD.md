@@ -106,7 +106,11 @@ systems of record.
 ## Implementation Architecture
 
 - Frontend: Vite React TypeScript SPA using Tailwind CSS 3.4, `@insforge/sdk`,
-  and `lucide-react`. Deploy through InsForge frontend deployments.
+  and Phosphor icons via `@phosphor-icons/react`. The exported design prototype
+  includes a self-contained inline SVG icon layer at
+  `design/project/assets/icons.js` for portability; production implementation
+  should use Phosphor while matching the prototype's icon choices, weight, and
+  sizing. Deploy through InsForge frontend deployments.
 - Backend/data plane: InsForge Postgres, Auth, RLS, Edge Functions, schedules,
   and server-side secrets. Browser code uses the InsForge anon key with RLS;
   webhook handlers, job workers, and external write executors use server-only

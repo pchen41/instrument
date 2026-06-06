@@ -26,6 +26,8 @@ The auth prototype is visual reference only for now. Demo auth is limited to use
 
 The console design must add a failed job/investigation state consistent with the existing activity and progress patterns. The current prototype shows `new`, `investigating`, and `complete`; the demo must also show `failed` with preserved progress, affected integration/source, error context, and a safe retry action when retry is supported.
 
+Iconography should follow the Phosphor visual language. The exported design prototype uses a self-contained inline SVG layer for portability, but the production React app should use `@phosphor-icons/react` while matching the prototype's icon choices, weight, and sizing.
+
 ## 3. Goals
 
 - Help teams improve observability before incidents happen.
