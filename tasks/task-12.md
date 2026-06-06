@@ -11,14 +11,15 @@ TrueFoundry: a recommendation PR generation job hits a forced retryable failure,
 survives it, emits telemetry, triggers a Datadog incident, investigates the
 induced failure, and eventually completes the original PR generation.
 
-Depends on Tasks 5, 8, 10, and 11. It may require external provisioning listed in `docs/ERD.md`.
-The MCP foundation should already exist from Task 5; this task validates and
-hardens the reliability proof instead of introducing MCP for the first time.
+Depends on Tasks 5A, 5B, 5C, 5D, 7, 8, 10, and 11. It may require external
+provisioning listed in `docs/ERD.md`. The MCP foundation should already exist
+from Task 5C; this task validates and hardens the reliability proof instead of
+introducing MCP for the first time.
 
 ## Requirements
 
 - Verify and, if needed, harden the Instrument-owned TrueFoundry observability
-  MCP server from Task 5 with bounded read-only tools:
+  MCP server from Task 5C with bounded read-only tools:
   - `query_truefoundry_model_metrics`
   - `query_truefoundry_mcp_metrics`
   - `search_truefoundry_request_logs`
@@ -26,7 +27,7 @@ hardens the reliability proof instead of introducing MCP for the first time.
   - `get_instrument_evidence_bundle`
 - Enforce allowlisted query templates, bounded time windows, redaction, and result-size limits in the MCP server.
 - Verify GitHub MCP, Datadog MCP, and Instrument observability MCP registrations
-  from Task 5, including stored non-secret FQNs, URLs, allowed tools, and health
+  from Task 5C, including stored non-secret FQNs, URLs, allowed tools, and health
   in `integrations.config`.
 - Ensure LLM/tool workflows use TrueFoundry AI Gateway or Agent API and persist
   streamed tool-call summaries in `ai_model_calls.tool_calls_redacted`, with
@@ -43,14 +44,20 @@ hardens the reliability proof instead of introducing MCP for the first time.
   - emits retry/error telemetry
   - does not duplicate external writes
   - updates integration health when appropriate
-- Ensure the Datadog instrumentation from Task 5 is enabled for the validation
+- Inject the forced retryable failure after at least one idempotent external
+  write step has completed, such as branch creation or a file update, so the
+  validation path actually exercises duplicate-write prevention on retry.
+- Ensure the Datadog instrumentation from Task 5D is enabled for the validation
   environment.
 - Configure or document the published Datadog monitor that fires from this
   telemetry. Because Task 9 only creates draft monitors, the
   reliability-validation monitor should be manually preconfigured/published in
   Datadog, or otherwise provisioned outside Instrument's draft-monitor flow and
   documented in the runbook.
-- Ensure the Datadog incident created from the telemetry links back to the original job through `incidents.caused_by_job_id` when app-side correlation can identify it.
+- Ensure the Datadog incident created from the telemetry contains enough alert
+  context, time window, workflow, integration/source, error code, and trace or
+  request IDs for the investigation to find the relevant Datadog and TrueFoundry
+  evidence.
 - Ensure smart investigation start automatically begins for the
   reliability-validation incident.
 - Ensure seed/reset tooling sets
@@ -69,12 +76,14 @@ hardens the reliability proof instead of introducing MCP for the first time.
 - The full PRD validation path can be run from a clean seeded state.
 - Forced retryable TrueFoundry/API failure does not lose job state or duplicate external writes.
 - Retry/error telemetry includes Datadog-routable service/environment/workflow/integration/error tags.
-- Retry/error telemetry is visible to the Datadog monitor through the Task 5 instrumentation path.
+- Retry/error telemetry is visible to the Datadog monitor through the Task 5D instrumentation path.
 - Datadog creates an incident from the telemetry monitor.
 - Smart mode starts the reliability-validation investigation automatically and
   shows a "Started automatically" indicator.
 - Investigation output distinguishes the induced rate limit/runtime configuration issue from a code defect and suggests the manual operational fix.
-- The incident can resolve while the original recommendation PR generation job eventually succeeds.
+- The incident can resolve through the authenticated Datadog recovery webhook
+  while the original recommendation PR generation job eventually succeeds. Do not
+  add a manual incident-resolve button for the first slice.
 - PR generation, incident investigation, incident resolution, and generated PR are separate but linkable console events.
 
 ## Automated Tests
@@ -82,9 +91,12 @@ hardens the reliability proof instead of introducing MCP for the first time.
 - Add an end-to-end test or scripted integration test for the reliability
   validation path using fixtures/mocks where provider sandboxes are unavailable.
 - Add tests for forced retry behavior and duplicate-write prevention.
-- Add tests for telemetry-to-incident correlation.
+- Add tests that the telemetry alert payload provides the workflow/source/error
+  and trace/request context needed by the investigation.
+- Add tests that the forced failure occurs after at least one idempotent external
+  write and that retry does not duplicate that write.
 - Add a test or scripted check that the reliability Datadog monitor query
-  matches the metric/event emitted by Task 5 instrumentation.
+  matches the metric/event emitted by Task 5D instrumentation.
 - Add tests for smart auto-start of the reliability-validation alert.
 - Add tests that the final PR generation job can resume and succeed after the
   documented simulated rate-limit fix is cleared.

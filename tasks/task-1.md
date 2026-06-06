@@ -19,7 +19,14 @@ The design reference is under `design/project/`. The primary console prototype i
 - Implement a sign-in-only demo auth flow backed by InsForge auth. Do not expose admin keys in frontend env vars.
 - Build the console shell with sidebar navigation, connected-source list, profile area, and empty server-backed page containers.
 - Keep the incident-fix PR action from the prototype out of the demo UI, or leave it disabled with clear internal code comments, because PRD/ERD mark it future scope.
-- Add environment examples for browser-safe InsForge values only.
+- Add environment examples for browser-safe InsForge values and optional
+  browser-safe Datadog RUM values only. Do not expose Datadog API keys, app keys,
+  InsForge admin keys, or provider secrets in frontend env vars.
+- Add a small frontend telemetry wrapper that initializes Datadog RUM/error
+  tracking only when browser-safe Datadog RUM config is present. It should record
+  route changes, console load failures, failed user actions, and API/read
+  failures as later views are built, while becoming a no-op when config is
+  absent.
 
 ## Acceptance Criteria
 
@@ -29,11 +36,15 @@ The design reference is under `design/project/`. The primary console prototype i
 - The three console sections exist as routable views, even if they initially render empty states.
 - No signup or OAuth setup flow is required for the demo unless the PRD changes.
 - No incident "Generate fix" workflow is available as an active demo action.
+- The frontend runs with Datadog RUM config absent, and uses the telemetry
+  wrapper when browser-safe RUM config is present.
 
 ## Automated Tests
 
 - Add unit tests for auth route guards and sign-in form validation.
 - Add a smoke/component test that renders the console shell and verifies the three navigation items.
+- Add a test that the frontend telemetry wrapper is a no-op without RUM config
+  and initializes with browser-safe RUM config.
 - Add a build check in the task notes once it passes.
 
 ## Manual Verification

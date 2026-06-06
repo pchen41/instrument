@@ -13,6 +13,8 @@ that are now listed as folded in the ERD.
 
 This task establishes the database foundation used by every later task.
 
+Depends on Task 0.
+
 ## Requirements
 
 - Create InsForge/Postgres migrations for the first-slice enums:
@@ -63,6 +65,9 @@ This task establishes the database foundation used by every later task.
     `incident_state = 'active'`
   - `external_write_actions(workspace_id, provider, action_kind, idempotency_key)`
   - `telemetry_emissions(workspace_id, metric_name, idempotency_key)`
+- Add the `approvals.idempotency_key` column and a partial unique index for
+  active approvals as described in `docs/ERD.md`, so duplicate approval requests
+  for the same target/action cannot fork the audit trail.
 - Enable RLS on all workspace-owned tables.
 - Add simple first-slice demo RLS policies using the ERD membership pattern
   without introducing recursive policies:
@@ -128,8 +133,10 @@ This task establishes the database foundation used by every later task.
 - Add duplicate-insert tests for:
   - `jobs(workspace_id, job_type, idempotency_key)`
   - `external_write_actions(workspace_id, provider, action_kind, idempotency_key)`
+  - active approval idempotency constraints
   - `pr_review_comments` semantic and revision dedupe constraints
   - active incident correlation partial uniqueness
+  - `telemetry_emissions` duplicate idempotency behavior
 
 ## Manual Verification
 

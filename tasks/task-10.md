@@ -8,11 +8,16 @@ Not started.
 
 Datadog webhooks are template-driven. The ERD defines the minimum JSON payload and mapping rules Instrument expects.
 
-Depends on Tasks 3, 4, and 5.
+Depends on Tasks 3, 4, 5A, and 5D. Task 11 consumes created incidents for
+investigation.
 
 ## Requirements
 
 - Add a Datadog webhook handler.
+- Identify the target workspace before writing `inbound_webhooks`; for the first
+  slice this may be the single configured workspace, but the handler should
+  document whether it uses a workspace-specific URL, configured default
+  workspace, or another routing mechanism.
 - Authenticate Datadog webhooks using the configured shared secret/custom header or supported Datadog auth method.
 - Treat `inbound_webhooks.signature_valid` as "webhook authentication passed" for
   Datadog. Datadog payloads are template-driven and may use a shared
@@ -27,6 +32,9 @@ Depends on Tasks 3, 4, and 5.
   - `alert_transition_key`
   - `incident_correlation_key`
   - `provider_correlation_key`
+- Parse `trace_id` and `request_id` when present in the configured Datadog
+  webhook payload so investigations can use them to find Datadog and TrueFoundry
+  evidence.
 - Map Datadog transitions:
   - `Recovered` -> `resolved`
   - Triggered/re-triggered/warn/no-data/renotify first-slice states -> `firing`
@@ -56,6 +64,8 @@ Depends on Tasks 3, 4, and 5.
   updates, or investigation jobs.
 - Firing alerts create or update active incidents.
 - Recovery alerts resolve incidents and keep them visible in the resolved/archive view.
+- The first slice does not add a manual incident-resolve button; resolution is
+  driven by authenticated Datadog recovery webhooks.
 - Manual mode never starts investigations automatically.
 - Auto mode starts every firing alert investigation.
 - Smart mode starts the reliability-validation alert automatically and leaves
@@ -69,6 +79,8 @@ Depends on Tasks 3, 4, and 5.
 - Add transition mapping tests.
 - Add incident idempotency tests for replayed transition keys and repeated firing updates.
 - Add start-mode tests for manual, auto, and smart.
+- Add tests proving trace/request IDs from the Datadog webhook are preserved in
+  incident signals or evidence input for investigation.
 
 ## Manual Verification
 

@@ -44,6 +44,7 @@ Scope should be read in three layers:
 - Keep humans in control of external writes.
 - Automatically post scoped, deduplicated, auditable GitHub PR observability review comments.
 - Provide a polished web console with durable progress, retry, and refresh behavior that does not depend on the user's browser session.
+- Instrument the Instrument app itself with Datadog logs, metrics, traces, and optional frontend RUM/error telemetry as features are built, so the product demonstrates the observability practices it recommends.
 - Prove TrueFoundry-backed reliability behavior through a scoped validation path: retries, retry/error metrics, Datadog incident creation, and AI investigation of the induced failure.
 
 ## 4. Non-Goals
@@ -250,9 +251,25 @@ Requirements:
 - **JOB-11**: While a user is viewing related content, the console must update visible incident, recommendation, PR review, integration, and job state automatically where practical. Where automatic replacement would be disruptive, it may show that content changed and provide a refresh action.
 - **JOB-12**: Refreshing content must not create duplicate jobs unless the user explicitly requests a new investigation or regeneration.
 - **JOB-13**: In-console change notifications must be debounced to avoid noisy repeated prompts during alert storms or batch scans.
-- **JOB-14**: When a PR review recommendation becomes outdated because the reviewed PR was merged without applying the recommendation, the console must move it to the archive and notify the viewer without requiring a browser refresh.
+- **JOB-14**: When a PR review recommendation becomes outdated because the reviewed PR was merged, the console must move it to the archive, explain that the reviewed PR is no longer active, and notify the viewer without requiring a browser refresh. The first slice does not need to detect whether the suggestion was applied before merge.
 - **JOB-15**: When a new recommendation is generated from the updated codebase, the console must surface it in the active recommendations view without requiring a browser refresh.
 - **JOB-16**: The first product slice does not require external notifications such as Slack, email, or PagerDuty.
+
+## 8.1 Instrument Self-Observability
+
+Instrument must add broad Datadog instrumentation to its own app code as the
+first slice is built. This is separate from, and broader than, the specific
+retry/error telemetry used for the TrueFoundry reliability proof.
+
+Requirements:
+
+- **OBS-1**: Server-side handlers, workers, webhook ingestion, external provider calls, model-call orchestration, scheduled job ticks, UI read endpoints, and external write executors must emit structured logs with service, environment, workflow, job type, integration/provider, request/correlation IDs when available, and redacted error details.
+- **OBS-2**: Server-side code must emit metrics for request/job counts, latency, failures, retries, provider/API errors, schema validation failures, queue depth or due-job count where practical, and external write outcomes.
+- **OBS-3**: Server-side code should emit traces/spans for inbound requests, job execution phases, provider calls, model calls, MCP tool calls, database operations where practical, and external writes.
+- **OBS-4**: Frontend code should include optional Datadog RUM/error tracking hooks for route changes, console load failures, failed user actions, and API/read endpoint failures when browser-safe Datadog RUM configuration is provided. The app must still run when RUM is not configured.
+- **OBS-5**: Instrumentation must not log raw provider credentials, InsForge admin keys, webhook secrets, model prompts containing sensitive code beyond approved redacted summaries, or unbounded provider payloads.
+- **OBS-6**: Datadog instrumentation config must be environment-driven and split between server-only secrets and browser-safe public values. Missing Datadog telemetry configuration should degrade gracefully in local development and tests.
+- **OBS-7**: The reliability-validation metrics `instrument.job.retry` and `instrument.job.error` are required, stable, Datadog-routable signals within the broader instrumentation set.
 
 ## 9. Evidence, Confidence, and AI Output
 
@@ -309,6 +326,8 @@ The first product slice must include:
 - Automatic scans on commits to the primary branch with a cooldown.
 - Datadog alert ingestion for the configured service, incident investigation, evidence display, resolved incident history, and smart investigation start.
 - Durable job state for long-running work, retries, live updates, refresh recovery, and backend restart recovery.
+- Broad Datadog instrumentation for Instrument's own frontend, server functions,
+  workers, webhooks, provider calls, and external writes.
 - TrueFoundry reliability proof for forced retryable failures, retry/error metrics, Datadog incident creation, AI investigation, and background PR generation completion.
 - Console views for Incidents, Recommendations, and Integrations.
 
@@ -341,7 +360,7 @@ Later product iterations may add:
 ### 15.1 First-Slice Validation Path
 
 - Given Instrument is configured for the Instrument GitHub repository, when a PR introduces an observability gap, Instrument posts a concise review comment that cites the file and line.
-- Given the reviewed PR is merged without applying the recommendation, Instrument marks the related PR review recommendation `outdated`, moves it to the archive, explains why, and updates the console without a browser refresh.
+- Given the reviewed PR is merged, Instrument marks the related PR review recommendation `outdated`, moves it to the archive, explains that the reviewed PR is no longer active, and updates the console without a browser refresh. The first slice does not attempt to prove whether the author applied the suggestion before merging.
 - Given the updated primary branch is scanned, Instrument creates a new active recommendation with evidence from the codebase or Datadog.
 - Given the user approves PR generation for a code-based recommendation, Instrument starts a durable PR generation job and shows named progress phases.
 - Given a forced retryable TrueFoundry/API rate-limit error occurs, the job enters `retrying`, preserves progress, emits retry/error telemetry, and avoids duplicate external writes.
@@ -361,3 +380,7 @@ Later product iterations may add:
 - Given Datadog does not provide ownership, criticality, or notification routing for a service, Instrument omits that context instead of inferring it.
 - Given the backend restarts or the user refreshes during a running job, the console restores persisted job state without re-running the job.
 - Given an integration is disconnected, degraded, rate-limited, or missing credentials, the console communicates the degraded state and avoids pretending analysis is complete.
+- Given Datadog telemetry configuration is present, Instrument emits app logs,
+  metrics, traces, and frontend RUM/error telemetry for the relevant workflow;
+  given it is absent in local development, workflows continue and tests can use a
+  mock telemetry sink.

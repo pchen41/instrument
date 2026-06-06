@@ -8,7 +8,8 @@ Not started.
 
 The prototype uses browser-local mock state. The PRD requires the console to show server-backed state and resume after refresh without re-running jobs.
 
-Depends on Tasks 1, 2, and 3.
+Depends on Tasks 1, 2, and 3 for seeded reads. Live retry, approval,
+dismiss/restore, and investigation-start mutations depend on Task 5A endpoints.
 
 ## Requirements
 
@@ -23,6 +24,9 @@ Depends on Tasks 1, 2, and 3.
   - `succeeded` -> `complete`.
   - terminal `failed` -> failed display state.
 - Add the failed investigation/job UI state required by the PRD: preserved progress, affected integration/source, error summary, and retry action when `safe_to_retry` is true.
+- Render automatically started investigations with a "Started automatically"
+  indicator in both the incident list and incident detail when
+  `incidents.started_automatically = true`.
 - Implement the investigation-start setting control with labels:
   - Manual
   - Automatic

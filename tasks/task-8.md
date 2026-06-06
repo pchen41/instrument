@@ -10,13 +10,18 @@ Generated recommendation PRs are in first-slice scope, but only after explicit
 human approval. Incident fix PR generation is future scope and should not be
 implemented here.
 
-Depends on Tasks 3, 4, 5, and 7.
+Depends on Tasks 3, 4, 5A, 5C, 5D, 6, and 7. Task 6 provides the GitHub webhook
+sync path used to update generated PR opened, merged, closed, and stale state.
 
 ## Requirements
 
 - Add a confirmation flow for code-based recommendation steps of kind `code_pr`.
 - Create an `approvals` row before starting any external write.
+- Use an approval idempotency key so duplicate clicks or retried requests do not
+  create multiple active approvals for the same recommendation step.
 - Hash the approved redacted payload and require `external_write_actions.request_hash` to match it during execution.
+- Treat one approval as authorizing the full approved PR-generation operation,
+  while recording each provider write as a separate `external_write_actions` row.
 - Enqueue a `recommendation_pr_generation` job for the approved step.
 - Generate a clear branch name, PR title, summary, changed files, and evidence-linked PR body.
 - Store planned/generated PR state in the relevant `recommendations.steps`
@@ -49,6 +54,7 @@ Depends on Tasks 3, 4, 5, and 7.
 ## Automated Tests
 
 - Add approval-gate tests that reject unapproved external writes.
+- Add approval idempotency tests for duplicate approve/request attempts.
 - Add request-hash mismatch tests.
 - Add idempotency tests for branch/create file/create PR retry.
 - Add generated PR state transition tests for opened, merged, closed, and stale.

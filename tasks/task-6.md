@@ -8,8 +8,9 @@ Not started.
 
 The PRD explicitly allows automatic GitHub PR observability review comments, but they must be scoped, deduplicated, auditable, and limited to configured repositories.
 
-Depends on Tasks 2, 3, 4, and 5. Use the MCP and TrueFoundry Agent/API
-foundation established in Task 5.
+Depends on Tasks 2, 3, 5A, and 5C. Use the MCP and TrueFoundry Agent/API
+foundation established in Task 5C. Task 4 consumes the PR review records in the
+console but is not required for the backend webhook/commenting implementation.
 
 ## Requirements
 
@@ -28,7 +29,7 @@ foundation established in Task 5.
 - Enqueue a `github_pr_review_analysis` job idempotently per PR revision/action.
 - Analyze changed files plus relevant neighboring code before commenting.
 - Produce only specific, actionable observability findings tied to changed file and line.
-- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for model-assisted analysis. Do not call model providers directly.
+- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5C for model-assisted analysis. Do not call model providers directly.
 - Validate AI output against structured schemas before storing or posting.
 - Persist `ai_model_calls` for generated findings/comments. Store MCP/tool
   summaries in `ai_model_calls.tool_calls_redacted`, cited read outputs in
@@ -52,7 +53,9 @@ foundation established in Task 5.
   `pr_review_comments`/recommendation state without posting a duplicate
   comment.
 - The console shows PR review recommendation records with PR number, title, author, branch, comment count, comment body, and code locations.
-- When a reviewed PR is merged without applying the recommendation, the related PR review recommendation can be marked `outdated` and moved to archive.
+- When a reviewed PR is merged, the related PR review recommendation is marked
+  `outdated` and moved to archive for the first slice. Do not attempt semantic
+  detection of whether the author applied the suggestion before merging.
 
 ## Automated Tests
 

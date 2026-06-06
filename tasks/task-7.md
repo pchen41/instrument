@@ -9,7 +9,9 @@ Not started.
 The first product slice requires proactive recommendations from primary-branch
 scans with dedupe, lifecycle states, active/archive views, and dependent steps.
 
-Depends on Tasks 3, 4, 5, and 6 for webhook foundation.
+Depends on Tasks 3, 5A, 5C, and 6 for webhook and worker/AI foundation. Task 4
+consumes recommendation state in the console but is not required for backend scan
+and lifecycle implementation.
 
 ## Requirements
 
@@ -36,7 +38,7 @@ Depends on Tasks 3, 4, 5, and 6 for webhook foundation.
   `recommendation_generation` jobs; do not introduce a separate
   `datadog_monitor_analysis` job type. `pr_review` recommendations are normally
   created by Task 6 and should be preserved/deduped correctly by lifecycle code.
-- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for model-assisted recommendation generation. Do not call model providers directly.
+- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5C for model-assisted recommendation generation. Do not call model providers directly.
 - Validate recommendation output against structured schemas before display.
 - Persist `ai_model_calls` for generated recommendations. Store MCP/tool
   summaries in `ai_model_calls.tool_calls_redacted` and cited read outputs in
@@ -57,6 +59,10 @@ Depends on Tasks 3, 4, 5, and 6 for webhook foundation.
 - A new recommendation appears in the active recommendations view without browser refresh.
 - A recommendation becomes `accepted` only after all required steps are done.
 - A dependent alert step remains locked until its prerequisite instrumentation step completes.
+- The first slice does not require proving that a merged instrumentation PR was
+  deployed and emitted a metric in Datadog. Live dependent-step unlocking may be
+  demonstrated through explicit step completion or seeded state; Datadog metric
+  verification for alert creation is handled in Task 9.
 - Dismissed recommendations are archived and restorable; outdated recommendations are archived and not treated as restorable unless product scope changes.
 
 ## Automated Tests

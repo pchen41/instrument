@@ -99,6 +99,9 @@ GitHub, Datadog, or TrueFoundry as local systems of record.
 - Store every external write in `external_write_actions`. Automatic GitHub PR
   review comments do not require human approval, but they still require audit and
   idempotency.
+- Reliability telemetry uses Datadog-routable tags such as workflow,
+  integration/source, error/rate-limit code, service, environment, trace IDs, and
+  request IDs. Do not expose raw job IDs as Datadog tags.
 - Keep the custom TrueFoundry observability MCP server and Agent API MCP tool
   loop as first-class first-slice architecture. They are part of the product
   validation story, not later product scope.
@@ -138,18 +141,27 @@ GitHub, Datadog, or TrueFoundry as local systems of record.
 - Primary server functions: GitHub webhook ingestion, Datadog webhook ingestion,
   job worker/dispatcher, external action executor, and UI read APIs for
   dashboard/detail views.
-- Worker runtime recommendation: implement the first-slice worker as an
-  InsForge Edge Function named something like `job-worker-tick`, invoked by an
-  InsForge schedule every minute and opportunistically invoked after enqueueing
-  important jobs. Each invocation should claim only due jobs, process bounded
-  phases under transactional leases, persist progress, and requeue itself through
+- App self-observability: as server functions, workers, provider clients, model
+  orchestration, UI read APIs, and frontend routes are implemented, add Datadog
+  instrumentation for structured logs, metrics, traces/spans, and optional
+  frontend RUM/error tracking. Use environment-driven configuration with
+  server-only secrets for backend telemetry and browser-safe public values for
+  frontend RUM. Keep local/test mode functional through a no-op or mock
+  telemetry sink.
+- Worker runtime recommendation: prove scheduled InsForge Edge Function ticks
+  against a representative TrueFoundry Agent/MCP streamed workload before later
+  workflow tasks depend on the runtime. The initial candidate is an InsForge Edge
+  Function named something like `job-worker-tick`, invoked by an InsForge schedule
+  every minute and opportunistically invoked after enqueueing important jobs. Each
+  invocation should claim only due jobs, process bounded phases under
+  transactional leases, persist progress, and requeue itself through
   `jobs.next_run_at` when additional work remains. InsForge Functions are
   Deno-powered serverless TypeScript intended for request/response and
   short-lived jobs, and schedules invoke functions through cron with a minimum
-  one-minute interval. Use InsForge Compute as the fallback when the worker needs
-  a process that stays up, longer uninterrupted execution, or background
-  concurrency beyond scheduled function ticks. Worker idempotency and persisted
-  retry state remain required either way.
+  one-minute interval. If a representative Agent API tool loop cannot safely
+  complete or resume within that model, promote InsForge Compute into the
+  first-slice worker runtime rather than treating it as later fallback. Worker
+  idempotency and persisted retry state remain required either way.
 - LLM orchestration: TrueFoundry Agent API for tool-using workflows. Attach
   GitHub MCP, Datadog MCP, and Instrument observability MCP servers by
   `integration_fqn` with explicit tool allowlists and bounded iteration limits.
@@ -496,10 +508,11 @@ Required constraints:
   `(pull_request_id, revision_fingerprint)`.
 - Unique cross-revision posted semantic gap:
   `(pull_request_id, semantic_fingerprint)` where
-  `status in ('posted', 'resolved')`.
+  `status = 'posted'`.
 
 These two constraints preserve PR-5 and PR-6 after collapsing
-`pr_review_runs` and `pr_review_findings`.
+`pr_review_runs` and `pr_review_findings`, while still allowing a previously
+resolved semantic gap to be posted again if a later PR revision reintroduces it.
 
 ### `recommendations`
 
@@ -559,7 +572,6 @@ normalization is folded into this table plus `inbound_webhooks` and
 | `id` | `uuid pk` | |
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `webhook_event_id` | `uuid fk inbound_webhooks.id null` | Creation/update source. |
-| `caused_by_job_id` | `uuid fk jobs.id null` | Reliability-validation link from telemetry incident to original job. |
 | `external_alert_key` | `text not null` | Datadog alert/monitor key. |
 | `incident_correlation_key` | `text not null` | Used to update current open incident. |
 | `alert_transition_key` | `text null` | Per-transition dedupe key from Datadog payload. |
@@ -685,8 +697,18 @@ creation, and other external writes. Keep separate from
 | `state` | `approval_state not null default 'requested'` | |
 | `approval_summary` | `text not null` | What human approved. |
 | `approved_payload_hash` | `text null` | Hash of exact redacted request/config approved. |
+| `idempotency_key` | `text not null` | Prevent duplicate active approvals for the same target/action. |
 | `approval_version` | `integer not null default 1` | Increment if proposed payload changes. |
 | `created_at`, `approved_at`, `executed_at` | `timestamptz null` | |
+
+Recommended partial unique index:
+
+- `(workspace_id, action_type, target_type, target_id, coalesce(target_step_key, ''), idempotency_key)`
+  where `state in ('requested', 'approved')`.
+
+One approval may gate multiple provider writes for the same approved payload,
+such as GitHub branch creation, file updates, and PR creation. Each individual
+provider write is still represented as its own `external_write_actions` row.
 
 ### `external_write_actions`
 
@@ -716,12 +738,20 @@ Unique: `(workspace_id, provider, action_kind, idempotency_key)`.
 
 The external action executor must reject every row except
 `github_review_comment` unless it references an approved, unrevoked approval and
-`request_hash` equals `approvals.approved_payload_hash`.
+`request_hash` equals `approvals.approved_payload_hash`. A single approval can
+authorize multiple `external_write_actions` rows when the human approved one
+multi-write operation.
 
 ### `telemetry_emissions`
 
 Metrics/events Instrument emits about its own reliability, especially retry and
 error telemetry used by the TrueFoundry/Datadog reliability proof.
+
+This table is an app-side audit record for important emitted reliability
+signals. It does not replace broad Datadog app instrumentation. General logs,
+metrics, traces, and frontend RUM events should be sent to Datadog directly
+through the configured telemetry client/exporter and only written here when the
+signal is part of first-slice reliability/audit state.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -730,13 +760,11 @@ error telemetry used by the TrueFoundry/Datadog reliability proof.
 | `job_id` | `uuid fk jobs.id null` | |
 | `attempt_number` | `integer null` | Mirrors `jobs.attempts` when available. |
 | `integration_id` | `uuid fk integrations.id null` | Source involved in failure/retry. |
-| `incident_id` | `uuid fk incidents.id null` | Incident created from this telemetry, when known. |
 | `metric_name` | `text not null` | Example: `instrument.job.retry`. |
 | `tags` | `jsonb not null default '{}'` | Include service/environment/workflow/integration/error tags for Datadog routing. |
 | `value` | `numeric not null default 1` | |
 | `truefoundry_trace_id` | `text null` | |
 | `truefoundry_request_id` | `text null` | |
-| `external_monitor_id` | `text null` | Datadog monitor that fired, when known. |
 | `emission_state` | `external_action_state not null default 'planned'` | |
 | `idempotency_key` | `text not null` | Prevent duplicate emission submission. |
 | `emitted_at` | `timestamptz null` | |
@@ -744,8 +772,11 @@ error telemetry used by the TrueFoundry/Datadog reliability proof.
 
 Unique: `(workspace_id, metric_name, idempotency_key)`.
 
-Avoid raw job IDs as Datadog metric tags. Correlate job IDs app-side using trace
-IDs, request IDs, emitted timestamps, and `telemetry_emissions.job_id`.
+Avoid raw job IDs as Datadog metric tags. If the UI wants to show nearby
+retrying jobs, derive that display context from workflow, integration/source,
+error code, trace IDs, request IDs, emitted timestamps, and existing job state.
+Incident investigation should rely on Datadog and TrueFoundry evidence rather
+than a pre-wired job pointer.
 
 ## Folded Tables and Where Their Data Lives
 
@@ -873,16 +904,27 @@ The ERD assumes these are supplied outside the database:
   MCP auth. Datadog MCP needs `mcp_read` for reads and `mcp_write` plus
   resource-level permissions for draft monitor creation. Publishing notifying
   monitors is not in first-slice scope.
+- Datadog telemetry configuration for Instrument's own app observability:
+  server-only API/app keys or OpenTelemetry/exporter endpoint values for backend
+  logs, metrics, and traces, plus optional browser-safe RUM application/client
+  values if frontend RUM is enabled. Local development may use a no-op/mock
+  telemetry sink.
 - The Datadog webhook template must include fields sufficient to synthesize
   `external_delivery_id`, `alert_transition_key`, and
   `incident_correlation_key`.
+- The Datadog webhook endpoint or handler configuration must identify the target
+  workspace before downstream writes. For the first slice this may be the single
+  configured workspace, but future-compatible paths may include a workspace slug
+  or ID in the webhook URL.
 - Reliability-validation Datadog monitor(s) that trigger on
   Instrument/TrueFoundry retry/error telemetry, unless monitor publishing is
   implemented after human approval.
 - Telemetry tags/attributes for the reliability proof, including service,
   environment, stable workflow name, integration source, error/rate-limit code,
-  and trace/request IDs. Avoid raw job IDs as Datadog metric tags; use
-  application-side correlation to set `incidents.caused_by_job_id`.
+  and trace/request IDs. Avoid raw job IDs as Datadog metric tags. Any link from
+  a reliability incident back to a retrying job is best-effort display context;
+  the investigation should establish the rate-limit cause from Datadog and
+  TrueFoundry evidence.
 
 ## Webhook Payload Alignment
 
@@ -927,7 +969,9 @@ The configured Datadog webhook payload should emit this minimum JSON contract:
   "tags": "$TAGS",
   "service": "$TAGS[service]",
   "env": "$TAGS[env]",
-  "instrument_reliability": "$TAGS[instrument_reliability]"
+  "instrument_reliability": "$TAGS[instrument_reliability]",
+  "trace_id": "$TAGS[trace_id]",
+  "request_id": "$TAGS[request_id]"
 }
 ```
 
@@ -965,11 +1009,16 @@ Mapping rules:
 - Implement job workers with transactional leases or `for update skip locked`;
   a browser refresh should only read `jobs.phases`, `jobs.attempts`, and related
   aggregate rows, never restart work.
-- Implement the worker as a scheduled Edge Function tick by default. Keep each
-  invocation short, claim due jobs under a lease, process bounded work, and
-  requeue through `jobs.next_run_at` when additional work remains. Use Compute
-  only if the scheduled function model proves insufficient and the project has
-  Compute enabled.
+- Prove the worker runtime with a representative streamed TrueFoundry Agent/MCP
+  workload before downstream provider tasks depend on it. Start with scheduled
+  Edge Function ticks if they fit the workload. Promote Compute into first-slice
+  scope if the scheduled function model cannot complete or safely resume the
+  representative workload.
+- Add shared Datadog instrumentation utilities early and use them in every new
+  server function, worker path, provider client, model/MCP call path, and UI read
+  endpoint. Emit structured logs, metrics, and traces/spans with stable service,
+  environment, workflow, job type, integration/provider, request ID, trace ID,
+  and redacted error fields. Do not log secrets or unbounded provider payloads.
 - Use `jobs` for durable workflow state, scan state, progress phases, retry
   attempts, failure state, and bounded audit notes.
 - Use simple polling against list/detail endpoints, `updated_at`, and

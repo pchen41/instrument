@@ -11,7 +11,7 @@ creation. The ERD notes that Datadog MCP `create_datadog_monitor` creates draft
 monitors that do not send notifications; publishing notifying monitors is future
 scope for the first product slice.
 
-Depends on Tasks 3, 4, 5, and 7. Datadog monitor analysis plugs into the
+Depends on Tasks 3, 4, 5A, 5C, 5D, and 7. Datadog monitor analysis plugs into the
 `recommendation_generation` jobs created by Task 7; do not add a separate
 `datadog_monitor_analysis` job type.
 
@@ -34,13 +34,15 @@ Depends on Tasks 3, 4, 5, and 7. Datadog monitor analysis plugs into the
 - Create `approvals` rows and store generated draft monitor state in the
   relevant `recommendations.steps` object for approved new-alert
   recommendations.
+- Use approval idempotency keys so duplicate clicks or retried requests do not
+  create multiple active approvals for the same recommendation step.
 - Enqueue and run a durable `datadog_alert_generation` job for approved new-alert recommendations; do not create Datadog monitors directly from browser state.
 - Execute Datadog draft monitor creation through the approved Datadog integration/MCP path.
 - Record `external_write_actions` for Datadog writes.
 - Store resulting Datadog monitor ID/link and `external_state = 'draft'` in the
   recommendation step JSON.
 - Emit evidence items for monitor config, metric existence, alert history, and relevant code paths.
-- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for
+- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5C for
   model-assisted monitor analysis. Persist `ai_model_calls`, tool summaries in
   `ai_model_calls.tool_calls_redacted`, and cited outputs as `evidence_items`.
 
@@ -60,6 +62,7 @@ Depends on Tasks 3, 4, 5, and 7. Datadog monitor analysis plugs into the
 
 - Add metric verification tests for verified, expected-after-step, and unverified states.
 - Add tests that unapproved Datadog writes are rejected.
+- Add approval idempotency tests for duplicate approve/request attempts.
 - Add tests for generated monitor payload hashing and external write audit.
 - Add job tests for `datadog_alert_generation` progress, retry, and failure handling.
 - Add component tests for monitor diff drawer and draft monitor result state.

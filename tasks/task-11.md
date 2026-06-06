@@ -8,8 +8,8 @@ Not started.
 
 Incident investigations are read-only in every investigation-start mode. They must never auto-generate or apply fixes. The output must be structured, validated, evidence-backed, and careful about confidence.
 
-Depends on Tasks 5 and 10. Uses the shared TrueFoundry AI/MCP foundation and
-minimal Instrument observability MCP server from Task 5, plus the
+Depends on Tasks 5A, 5B, 5C, and 10. Uses the shared TrueFoundry AI/MCP
+foundation and minimal Instrument observability MCP server from Task 5C, plus the
 GitHub/Datadog integration configuration from Tasks 2, 6, and 9. Task 12
 hardens the reliability-validation path, but the core MCP registration should
 not be deferred past this investigation task.
