@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
 
 from settings import Settings, load_settings
 from tools import register_tools
@@ -46,11 +45,18 @@ class DemoBearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 def create_mcp(settings: Settings) -> FastMCP:
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=bool(settings.allowed_hosts),
+        allowed_hosts=settings.allowed_hosts,
+        allowed_origins=settings.allowed_origins,
+    )
+
     mcp = FastMCP(
         "Instrument TrueFoundry Observability",
         stateless_http=True,
         json_response=True,
-        streamable_http_path="/",
+        streamable_http_path="/mcp",
+        transport_security=transport_security,
     )
     register_tools(mcp, settings)
     return mcp
@@ -67,21 +73,12 @@ def create_app(settings: Settings | None = None) -> Starlette:
                 "service": "instrument-truefoundry-mcp",
                 "truefoundry_configured": settings.truefoundry_configured,
                 "mcp_auth_configured": settings.mcp_auth_configured,
+                "allowed_hosts_configured": bool(settings.allowed_hosts),
             }
         )
 
-    @contextlib.asynccontextmanager
-    async def lifespan(_: Starlette):
-        async with mcp.session_manager.run():
-            yield
-
-    app = Starlette(
-        routes=[
-            Route("/healthz", healthz, methods=["GET"]),
-            Mount("/mcp", app=mcp.streamable_http_app()),
-        ],
-        lifespan=lifespan,
-    )
+    mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)(healthz)
+    app = mcp.streamable_http_app()
     app.add_middleware(DemoBearerAuthMiddleware, settings=settings)
     return app
 

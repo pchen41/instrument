@@ -1,6 +1,6 @@
 # Instrument TrueFoundry MCP Server
 
-Demo-scoped remote MCP server for Instrument's TrueFoundry observability tools.
+Remote MCP server for Instrument's TrueFoundry observability tools.
 It is intentionally small: Render hosts the HTTP service, TrueFoundry MCP
 Gateway registers the public `/mcp` URL, and Agent API workflows call it by FQN.
 
@@ -26,6 +26,12 @@ Set these in Render. Record secret names only in task notes, never values.
 - `TFY_API_TOKEN` - TrueFoundry API token or VAT for server-side API calls.
 - `TFY_DATA_ROUTING_DESTINATION` - optional TrueFoundry routing header value.
 - `MCP_AUTH_TOKEN` - shared bearer/header token for the demo MCP endpoint.
+- `MCP_ALLOWED_HOSTS` - comma-separated host headers accepted by the MCP SDK's
+  DNS rebinding protection. For the current Render service, set
+  `instrument-9z6j.onrender.com`. Render's `RENDER_EXTERNAL_HOSTNAME` is also
+  accepted when present.
+- `MCP_ALLOWED_ORIGINS` - optional comma-separated origins if a browser-based
+  MCP client sends an `Origin` header.
 - `MAX_TIME_WINDOW_HOURS` - default `6`.
 - `MAX_RESULT_LIMIT` - default `50`.
 

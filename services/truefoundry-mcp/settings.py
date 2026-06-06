@@ -23,6 +23,11 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _csv_env(name: str) -> list[str]:
+    value = os.getenv(name, "")
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @dataclass(frozen=True)
 class Settings:
     tfy_base_url: str
@@ -33,6 +38,8 @@ class Settings:
     max_time_window_hours: int
     max_result_limit: int
     port: int
+    allowed_hosts: list[str]
+    allowed_origins: list[str]
 
     @property
     def truefoundry_configured(self) -> bool:
@@ -44,6 +51,11 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    allowed_hosts = _csv_env("MCP_ALLOWED_HOSTS")
+    if render_hostname and render_hostname not in allowed_hosts:
+        allowed_hosts.append(render_hostname)
+
     return Settings(
         tfy_base_url=os.getenv("TFY_BASE_URL", "https://gateway.truefoundry.ai").rstrip("/"),
         tfy_api_token=os.getenv("TFY_API_TOKEN"),
@@ -53,4 +65,6 @@ def load_settings() -> Settings:
         max_time_window_hours=_int_env("MAX_TIME_WINDOW_HOURS", 6),
         max_result_limit=_int_env("MAX_RESULT_LIMIT", 50),
         port=_int_env("PORT", 8000),
+        allowed_hosts=allowed_hosts,
+        allowed_origins=_csv_env("MCP_ALLOWED_ORIGINS"),
     )

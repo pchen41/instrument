@@ -15,6 +15,8 @@ services:
         sync: false
       - key: MCP_AUTH_TOKEN
         sync: false
+      - key: MCP_ALLOWED_HOSTS
+        value: "instrument-9z6j.onrender.com"
       - key: MAX_TIME_WINDOW_HOURS
         value: "6"
       - key: MAX_RESULT_LIMIT
