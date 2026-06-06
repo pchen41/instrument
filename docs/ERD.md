@@ -231,7 +231,7 @@ Primary key: `(workspace_id, user_id)`.
 | --- | --- | --- |
 | `workspace_id` | `uuid pk fk workspaces.id` | |
 | `investigation_start_mode` | `investigation_start_mode not null default 'manual'` | UI labels: Manual, Automatic, Let Instrument decide. |
-| `smart_start_rules` | `jsonb not null default '{}'` | Demo keyword/tag rule for smart auto-start. |
+| `smart_start_rules` | `jsonb not null default '{}'` | Optional deterministic keyword/tag rule if smart auto-start needs stricter demo behavior later. |
 | `primary_branch_scan_cooldown_seconds` | `integer not null default 900` | Cooldown for proactive scans. |
 | `pr_review_enabled` | `boolean not null default true` | Enables automatic scoped PR comments. |
 | `updated_by` | `uuid fk auth.users.id null` | |
@@ -277,6 +277,17 @@ Historical connection health.
 ### `mcp_servers`
 
 Configured MCP servers as seen through TrueFoundry MCP Gateway.
+There are two supported ways an implementation may reference a TrueFoundry-
+registered MCP server:
+
+- Direct MCP client path: call the copied MCP server URL, typically
+  `https://<control-plane-url>/api/llm/mcp/<integration-id>/server`, with a
+  TrueFoundry gateway token in `Authorization`. This is the default path for
+  Instrument's app code.
+- Agent API path: reference the registered server by its `integration_fqn`
+  inside the Agent API request. This is useful when TrueFoundry orchestrates
+  tool calls for an agent request rather than the app opening an MCP client
+  connection itself. This ERD stores it as optional compatibility metadata.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -284,8 +295,10 @@ Configured MCP servers as seen through TrueFoundry MCP Gateway.
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `integration_id` | `uuid fk integrations.id` | GitHub or Datadog provider integration. |
 | `gateway_integration_id` | `uuid fk integrations.id` | TrueFoundry integration used as the MCP gateway. |
-| `gateway_server_name` | `text not null` | TrueFoundry registered MCP server name. |
-| `integration_fqn` | `text null` | TrueFoundry registered integration FQN when using Agent/Gateway APIs. |
+| `mcp_server_url` | `text not null` | Copied TrueFoundry MCP server URL for direct MCP client calls. |
+| `gateway_server_name` | `text not null` | Human-readable TrueFoundry registered MCP server name from the gateway UI; useful for display and diagnostics, not necessarily callable by itself. |
+| `gateway_integration_id_value` | `text null` | URL path identifier in `/api/llm/mcp/<integration-id>/server`, when known. This is the identifier embedded in `mcp_server_url`. |
+| `integration_fqn` | `text null` | Optional full FQN for TrueFoundry Agent API requests, for example `truefoundry:mcp-server-group:...:mcp-server:...`. Not required when using `mcp_server_url` directly. |
 | `provider_server_name` | `text not null` | Example: `github`, `datadog`. |
 | `transport` | `text not null` | Usually `streamable_http` through gateway. |
 | `inbound_auth_mode` | `text null` | TrueFoundry gateway auth mode: `PAT`, `VAT`, IdP token, etc. |
@@ -1381,7 +1394,8 @@ The ERD assumes these are supplied outside the database:
 - TrueFoundry model provider account(s), model name(s), and
   `x-tfy-provider-name` value for Responses API calls.
 - TrueFoundry MCP Gateway registration for GitHub MCP and Datadog MCP, with
-  allowed toolsets and write-tool governance/approval policies.
+  copied MCP server URLs, allowed toolsets, and write-tool governance/approval
+  policies.
 - GitHub repository allowlist, webhook secret, and token/OAuth credentials
   capable of reading repos/PRs/diffs and posting scoped PR review comments.
   If recommendation PR generation is enabled, credentials also need branch/file
@@ -1504,12 +1518,7 @@ Mapping rules:
   work. InsForge realtime can be added later if polling becomes noisy.
 - For generated PR audit, patch hashes/excerpts plus GitHub links are sufficient;
   GitHub remains the source of truth for full diffs and commits.
-
-## Open Questions for Product/Implementation
-
-- Should TrueFoundry MCP calls use the Agent API `integration_fqn` flow or a
-  lower-level MCP gateway invocation path? This affects exact auth fields and
-  request IDs.
-- What exact deterministic rule should power smart investigation start in the
-  reliability demo: configured tag, monitor name keyword, service name, or a
-  combination?
+- For the reliability demo, smart investigation start can initially rely on the
+  alert copy and configured monitor semantics rather than a deterministic
+  keyword/tag rule. If the demo needs stricter behavior later, add a simple
+  Datadog tag or keyword rule into `workspace_settings.smart_start_rules`.
