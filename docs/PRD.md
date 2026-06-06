@@ -4,7 +4,7 @@
 
 Instrument is an AI SRE for software teams. It reads a team's codebase, GitHub activity, and observability signals to find gaps in instrumentation, suggest better alerts, and help on-call engineers investigate incidents.
 
-This PRD defines the product direction for Instrument and the first practical product slice to build. The long-term product is a code-aware reliability layer that continuously connects source code, operational telemetry, and human-approved remediation workflows. The first slice is intentionally scoped for a demonstrable end-to-end path, but it should be implemented as real product foundation rather than a presentation-only prototype.
+This PRD defines the product direction for Instrument and the first practical product slice to build. The long-term product is a code-aware reliability layer that continuously connects source code, operational telemetry, and human-approved remediation workflows. The first slice is intentionally scoped for a demonstrable end-to-end path.
 
 The initial product slice should prove one reliable-agent loop: Instrument reviews a GitHub PR, preserves and updates recommendations as code changes, generates a recommendation PR after human approval, survives a forced TrueFoundry/API rate-limit failure with durable retries, emits reliability telemetry, investigates the resulting Datadog incident with evidence, and generates a draft Datadog monitor from an accepted recommendation. This carved-out scope exists to make the product shippable and verifiable early, while preserving the architecture and product concepts needed for broader use.
 

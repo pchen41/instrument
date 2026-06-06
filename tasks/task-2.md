@@ -59,15 +59,17 @@ Depends on Task 0.
   - `pr_review_comments(pull_request_id, revision_fingerprint)`
   - partial unique
     `pr_review_comments(pull_request_id, semantic_fingerprint)` where
-    `status in ('posted', 'resolved')`
+    `status = 'posted'`
   - partial unique
     `incidents(workspace_id, incident_correlation_key)` where
     `incident_state = 'active'`
   - `external_write_actions(workspace_id, provider, action_kind, idempotency_key)`
   - `telemetry_emissions(workspace_id, metric_name, idempotency_key)`
 - Add the `approvals.idempotency_key` column and a partial unique index for
-  active approvals as described in `docs/ERD.md`, so duplicate approval requests
-  for the same target/action cannot fork the audit trail.
+  active approvals as described in `docs/ERD.md`. The active approval unique
+  index must exclude `idempotency_key`, so duplicate approval requests for the
+  same target/action cannot fork the audit trail by generating different
+  idempotency keys.
 - Enable RLS on all workspace-owned tables.
 - Add simple first-slice demo RLS policies using the ERD membership pattern
   without introducing recursive policies:
@@ -133,7 +135,8 @@ Depends on Task 0.
 - Add duplicate-insert tests for:
   - `jobs(workspace_id, job_type, idempotency_key)`
   - `external_write_actions(workspace_id, provider, action_kind, idempotency_key)`
-  - active approval idempotency constraints
+  - active approval uniqueness, including duplicate requests with different
+    idempotency keys for the same target/action
   - `pr_review_comments` semantic and revision dedupe constraints
   - active incident correlation partial uniqueness
   - `telemetry_emissions` duplicate idempotency behavior

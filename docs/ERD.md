@@ -11,14 +11,6 @@ GitHub, Datadog, or TrueFoundry as local systems of record.
 
 ## Sources Read
 
-- `docs/PRD.md`
-- `design/README.md`
-- `design/project/console/data.jsx`
-- `design/project/console/views.jsx`
-- `design/project/console/incidents.jsx`
-- `design/project/console/app.jsx`
-- `design/project/console/ui.jsx`
-- `design/project/auth.jsx`
 - TrueFoundry MCP Gateway docs: https://www.truefoundry.com/docs/ai-gateway/mcp/mcp-overview
 - TrueFoundry model metrics API docs: https://www.truefoundry.com/docs/ai-gateway/fetch-model-metrics
 - TrueFoundry MCP metrics API docs: https://www.truefoundry.com/docs/ai-gateway/fetch-mcp-metrics
@@ -703,8 +695,12 @@ creation, and other external writes. Keep separate from
 
 Recommended partial unique index:
 
-- `(workspace_id, action_type, target_type, target_id, coalesce(target_step_key, ''), idempotency_key)`
+- `(workspace_id, action_type, target_type, target_id, coalesce(target_step_key, ''))`
   where `state in ('requested', 'approved')`.
+
+`idempotency_key` prevents duplicate retries of the same request, but it is not
+part of the active approval uniqueness boundary. A new idempotency key must not
+allow a second active approval for the same target/action.
 
 One approval may gate multiple provider writes for the same approved payload,
 such as GitHub branch creation, file updates, and PR creation. Each individual
