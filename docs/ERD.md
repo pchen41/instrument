@@ -45,10 +45,11 @@ systems of record.
 - TrueFoundry model and MCP metrics are fetched from
   `POST /api/svc/v1/llm-gateway/metrics/query` with datasource
   `modelMetrics` or `mcpMetrics`. Persist the query envelope and result snapshot
-  when the metric output is used as incident or recommendation evidence.
+  as `evidence_items` when the metric output is used as incident or
+  recommendation evidence.
 - TrueFoundry request logs are fetched through the spans query API
-  `POST /api/svc/v1/spans/query`. Persist relevant spans as evidence, keyed by
-  trace/span/request IDs.
+  `POST /api/svc/v1/spans/query`. Persist relevant spans as evidence snapshots,
+  keyed by trace/span/request IDs.
 - Deploy an Instrument-owned HTTP MCP server on TrueFoundry, preferably with
   Python and FastMCP, to expose bounded read-only tools for TrueFoundry model
   metrics, MCP metrics, request logs, and evidence-bundle lookup. Register that
@@ -78,7 +79,8 @@ systems of record.
 ## Modeling Principles
 
 - Every user-owned table has `workspace_id` even though the demo has one
-  workspace. This keeps RLS simple and lets the implementation grow later.
+  workspace. This keeps RLS simple without requiring parent-join policies during
+  the hackathon build.
 - Store external IDs and cached snapshots, not authoritative copies of external
   systems.
 - Store every AI conclusion with evidence references and schema validation
@@ -86,11 +88,20 @@ systems of record.
 - Store every external write in `external_write_actions`. Automatic GitHub PR
   review comments do not require human approval, but they still require audit and
   idempotency.
-- Use durable `jobs`, `job_phases`, and `job_attempts` for all long-running work.
-  The UI derives progress and failure states from these rows.
+- Keep the custom TrueFoundry observability MCP server and Agent API MCP tool
+  loop as first-class demo architecture. They are part of the hackathon story,
+  not future scope.
+- Use durable `jobs` for all long-running work. Store the demo's named phases
+  and retry-attempt summaries in bounded `jsonb` arrays on `jobs` instead of
+  separate `job_phases` and `job_attempts` tables.
 - Use `jsonb` for provider-specific payloads, redacted request/response
-  summaries, and configuration diffs where external schemas are too unstable for
-  first-pass normalized columns.
+  summaries, UI-ready child collections, and configuration diffs where external
+  schemas are too unstable or too time-expensive to normalize for the demo.
+- Normalize only the records that need independent idempotency, audit, approval,
+  or cross-workflow lookup. For the demo, this keeps MCP/tool calls, model calls,
+  evidence, external writes, jobs, webhooks, recommendations, incidents, and
+  generated GitHub/Datadog artifacts first-class while collapsing display-only
+  child rows into their parent records.
 
 ## Implementation Architecture
 
@@ -134,7 +145,6 @@ erDiagram
   WORKSPACES ||--o{ WORKSPACE_MEMBERS : has
   WORKSPACES ||--|| WORKSPACE_SETTINGS : configures
   WORKSPACES ||--o{ INTEGRATIONS : has
-  INTEGRATIONS ||--o{ INTEGRATION_STATUS_EVENTS : records
   INTEGRATIONS ||--o{ MCP_SERVERS : exposes
   MCP_SERVERS ||--o{ MCP_TOOL_INVOCATIONS : executes
 
@@ -144,9 +154,6 @@ erDiagram
   SERVICES ||--o{ REPOSITORY_SERVICE_PATHS : maps
 
   REPOSITORIES ||--o{ GITHUB_PULL_REQUESTS : has
-  REPOSITORIES ||--o{ GITHUB_COMMITS : has
-  GITHUB_PULL_REQUESTS ||--o{ GITHUB_PR_COMMITS : includes
-  GITHUB_COMMITS ||--o{ GITHUB_PR_COMMITS : included_in
   GITHUB_PULL_REQUESTS ||--o{ GITHUB_PR_FILES : changes
   GITHUB_PULL_REQUESTS ||--o{ PR_REVIEW_RUNS : analyzed_by
   GITHUB_PULL_REQUESTS ||--o{ PR_REVIEW_FINDINGS : has
@@ -156,26 +163,21 @@ erDiagram
   WORKSPACES ||--o{ INBOUND_WEBHOOKS : receives
   INBOUND_WEBHOOKS ||--o{ DATADOG_ALERT_EVENTS : normalizes
   WORKSPACES ||--o{ JOBS : runs
-  JOBS ||--o{ JOB_PHASES : has
-  JOBS ||--o{ JOB_ATTEMPTS : retries
   JOBS ||--o{ JOB_AUDIT_EVENTS : audits
   JOBS ||--o{ MCP_TOOL_INVOCATIONS : calls
   JOBS ||--o{ AI_MODEL_CALLS : prompts
   AI_MODEL_CALLS ||--o{ MCP_TOOL_INVOCATIONS : selects
   JOBS ||--o{ EXTERNAL_WRITE_ACTIONS : performs
-  MCP_TOOL_INVOCATIONS ||--o{ TRUEFOUNDRY_METRIC_QUERIES : fetches
-  MCP_TOOL_INVOCATIONS ||--o{ TRUEFOUNDRY_SPANS : fetches
+  MCP_TOOL_INVOCATIONS ||--o{ EVIDENCE_ITEMS : produces
 
   REPOSITORIES ||--o{ SCANS : scanned_by
   JOBS ||--o{ SCANS : backs
   SCANS ||--o{ RECOMMENDATIONS : produces
-  RECOMMENDATIONS ||--o{ RECOMMENDATION_STEPS : has
   RECOMMENDATIONS ||--o{ RECOMMENDATION_EVENTS : changes
-  RECOMMENDATION_STEPS ||--o{ GENERATED_PULL_REQUESTS : may_open
-  GENERATED_PULL_REQUESTS ||--o{ GENERATED_PR_FILE_CHANGES : writes
-  RECOMMENDATION_STEPS ||--o{ GENERATED_DATADOG_MONITORS : may_create
+  RECOMMENDATIONS ||--o{ GENERATED_PULL_REQUESTS : may_open
+  RECOMMENDATIONS ||--o{ GENERATED_DATADOG_MONITORS : may_create
+  RECOMMENDATIONS ||--o{ EVIDENCE_ITEMS : cites
 
-  SERVICES ||--o{ OBSERVED_METRICS : emits_or_requires
   INTEGRATIONS ||--o{ DATADOG_MONITORS : caches
   DATADOG_MONITORS ||--o{ INCIDENTS : triggers
   DATADOG_MONITORS ||--o{ GENERATED_DATADOG_MONITORS : source_or_result
@@ -183,25 +185,23 @@ erDiagram
   SERVICES ||--o{ INCIDENTS : affected_by
   INBOUND_WEBHOOKS ||--o{ INCIDENTS : creates_or_updates
   DATADOG_ALERT_EVENTS ||--o{ INCIDENTS : updates
-  INCIDENTS ||--o{ INCIDENT_SIGNALS : shows
-  INCIDENTS ||--o{ INCIDENT_TIMELINE_EVENTS : records
-  INCIDENTS ||--o{ INCIDENT_HYPOTHESES : explains
-  INCIDENTS ||--o{ INCIDENT_CORRELATED_CHANGES : correlates
+  INCIDENTS ||--o{ EVIDENCE_ITEMS : cites
   JOBS ||--o{ TELEMETRY_EMISSIONS : emits
 
   WORKSPACES ||--o{ EVIDENCE_ITEMS : stores
-  EVIDENCE_ITEMS ||--o{ EVIDENCE_LINKS : supports
   JOBS ||--o{ EVIDENCE_ITEMS : collects
   AI_MODEL_CALLS ||--o{ EVIDENCE_ITEMS : cites
-  TRUEFOUNDRY_METRIC_QUERIES ||--o{ EVIDENCE_ITEMS : produces
-  TRUEFOUNDRY_SPANS ||--o{ EVIDENCE_ITEMS : produces
 
   WORKSPACES ||--o{ APPROVALS : requires
   APPROVALS ||--o{ EXTERNAL_WRITE_ACTIONS : authorizes
   WORKSPACES ||--o{ APP_EVENTS : notifies
 ```
 
-## Proposed Postgres Enums
+## Proposed Postgres Enums and JSON Vocabularies
+
+Create Postgres enums only for values stored in typed columns. Values used only
+inside bounded `jsonb` arrays are listed as JSON vocabularies below; they do not
+need first-pass database enum migrations for the demo.
 
 - `integration_provider`: `github`, `datadog`, `truefoundry`
 - `integration_status`: `connected`, `disconnected`, `degraded`,
@@ -215,17 +215,10 @@ erDiagram
   `truefoundry_logs_ingest`
 - `job_state`: `queued`, `running`, `retrying`, `failed`, `succeeded`,
   `cancelled`
-- `job_phase_state`: `pending`, `running`, `retrying`, `succeeded`, `failed`,
-  `skipped`
 - `webhook_auth_method`: `github_signature`, `shared_secret_header`,
   `custom_hmac`, `none`
 - `recommendation_category`: `instrumentation`, `alert`, `pr_review`
 - `recommendation_state`: `active`, `accepted`, `dismissed`, `outdated`
-- `recommendation_step_kind`: `code_pr`, `datadog_new_monitor`,
-  `datadog_monitor_change`, `dashboard_panel`, `manual_check`,
-  `pr_review_record`
-- `recommendation_step_state`: `locked`, `available`, `generating`, `ready`,
-  `done`, `failed`, `skipped`
 - `alert_state`: `firing`, `resolved`
 - `incident_state`: `active`, `resolved`
 - `confidence_level`: `high`, `likely`, `low`
@@ -237,11 +230,22 @@ erDiagram
 - `approval_state`: `requested`, `approved`, `rejected`, `revoked`, `executed`
 - `external_action_state`: `planned`, `running`, `succeeded`, `failed`,
   `skipped_duplicate`
+
+JSON vocabularies:
+
+- `job_phase_state`: `pending`, `running`, `retrying`, `succeeded`, `failed`,
+  `skipped`
+- `recommendation_step_kind`: `code_pr`, `datadog_new_monitor`,
+  `datadog_monitor_change`, `dashboard_panel`, `manual_check`,
+  `pr_review_record`
+- `recommendation_step_state`: `locked`, `available`, `generating`, `ready`,
+  `done`, `failed`, `skipped`
 - `metric_existence_state`: `verified_in_datadog`, `expected_after_step`,
   `unverified`
 - `step_completion_source`: `generated_pr_merged`, `datadog_monitor_created`,
   `external_monitor_change`, `manual_mark`, `pr_review_recorded`,
   `dashboard_panel_added`
+- `incident_root_cause_type`: `code`, `runtime_config`, `upstream`, `unknown`
 
 ## Core Workspace and Auth Tables
 
@@ -305,19 +309,9 @@ Represents configured GitHub, Datadog, and TrueFoundry integration state.
 
 Unique: `(workspace_id, provider)`.
 
-### `integration_status_events`
-
-Historical connection health.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `integration_id` | `uuid fk integrations.id` | |
-| `status` | `integration_status not null` | |
-| `reason` | `text null` | Examples: `missing_env`, `rate_limited`, `oauth_expired`. |
-| `details` | `jsonb not null default '{}'` | Redacted diagnostic details. |
-| `started_at` | `timestamptz not null` | |
-| `ended_at` | `timestamptz null` | Null while current. |
+For the demo, `integrations` stores current connection health directly. If
+historical health becomes important later, add an `integration_status_events`
+history table; do not build it for the first hackathon path.
 
 ### `mcp_servers`
 
@@ -371,8 +365,8 @@ Each Instrument observability tool must enforce allowlisted query templates,
 bounded time windows, redaction, and result-size limits. Tools should only
 return compact structured results; they should not write to InsForge directly.
 The Agent API caller/job worker consumes streamed tool call and tool result
-events, then persists `mcp_tool_invocations`, `truefoundry_metric_queries`,
-`truefoundry_spans`, and `evidence_items`. Pass job and agent-context
+events, then persists `mcp_tool_invocations` and any cited TrueFoundry metric,
+log, or span snapshots as `evidence_items`. Pass job and agent-context
 identifiers to the custom MCP server as explicit tool arguments. Headers such as
 `mcp_servers[].headers` or `x-tfy-mcp-headers` may be used for authentication or
 future confirmed pass-through behavior, but the demo should not depend on them
@@ -415,7 +409,7 @@ Audit and evidence spine for MCP calls via TrueFoundry Gateway.
 | `truefoundry_trace_id` | `text null` | Correlates with TF request logs. |
 | `truefoundry_span_id` | `text null` | |
 | `truefoundry_request_id` | `text null` | Gateway request/tool-call identifier when provided. |
-| `integration_status_event_id` | `uuid fk integration_status_events.id null` | Link 429/5xx failures to current health/rate-limit event. |
+| `integration_status_snapshot` | `jsonb null` | Compact status/error snapshot for 429/5xx failures; current health still lives on `integrations`. |
 | `started_at`, `completed_at` | `timestamptz` | |
 
 The canonical logical write idempotency key lives on `external_write_actions`.
@@ -505,22 +499,11 @@ Cached PR metadata needed for dedupe and console records.
 
 Unique: `(repository_id, external_pr_number)`.
 
-### `github_commits`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS. |
-| `repository_id` | `uuid fk repositories.id` | |
-| `sha` | `text not null` | |
-| `branch` | `text null` | |
-| `message` | `text null` | |
-| `author_login` | `text null` | |
-| `committed_at` | `timestamptz null` | |
-| `html_url` | `text null` | |
-| `raw` | `jsonb not null default '{}'` | Redacted GitHub payload. |
-
-Unique: `(repository_id, sha)`.
+Commit metadata used for deploy correlation is stored as `evidence_items`
+(`source_type = 'commit'`) or inside `incidents.correlated_changes` for the
+demo. GitHub remains the source of truth for full commit history, so do not
+build a first-pass `github_commits` cache unless later workflows need commit
+rows as independently addressable records.
 
 ### `github_push_events`
 
@@ -548,17 +531,6 @@ the fields needed for idempotency, cooldowns, and scan scope.
 | `created_at` | `timestamptz not null` | |
 
 Unique: `(repository_id, before_sha, after_sha, ref)`.
-
-### `github_pr_commits`
-
-Join table.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `pull_request_id` | `uuid fk github_pull_requests.id` | |
-| `commit_id` | `uuid fk github_commits.id` | |
-
-Primary key: `(pull_request_id, commit_id)`.
 
 ### `github_pr_files`
 
@@ -703,14 +675,17 @@ Durable state for all long-running workflows.
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `job_type` | `job_type not null` | |
 | `state` | `job_state not null default 'queued'` | |
-| `target_type` | `text not null` | Example: `incident`, `recommendation_step`, `pull_request`, `repository`. |
+| `target_type` | `text not null` | Example: `incident`, `recommendation`, `pull_request`, `repository`. |
 | `target_id` | `uuid not null` | Application-enforced polymorphic FK. |
+| `target_step_key` | `text null` | Stable key inside `recommendations.steps` for step-level jobs. |
 | `idempotency_key` | `text not null` | Prevent duplicate jobs on refresh/retry/webhook replay. |
 | `created_by` | `uuid fk auth.users.id null` | Null for webhooks/system jobs. |
 | `safe_to_retry` | `boolean not null default true` | Controls Retry button. |
 | `attempt_count` | `integer not null default 0` | |
 | `max_attempts` | `integer not null default 3` | |
 | `retry_policy` | `jsonb not null default '{}'` | Backoff policy snapshot used by workers. |
+| `phases` | `jsonb not null default '[]'` | Ordered UI-ready phase objects: key, label, state, retry note, timestamps. |
+| `attempts` | `jsonb not null default '[]'` | Bounded attempt summaries: attempt number, state, worker, error, backoff. |
 | `next_run_at` | `timestamptz null` | Backoff schedule. |
 | `locked_by` | `text null` | Worker ID that currently owns the lease. |
 | `locked_at` | `timestamptz null` | |
@@ -742,39 +717,23 @@ Investigation display mapping:
 - `cancelled`: `failed` with cancellation copy, unless the target workflow has
   a more specific cancelled UI state.
 
-### `job_phases`
+`jobs.phases` replaces the earlier `job_phases` table for the demo. Example
+phase object:
 
-Named progress phases shown in the console.
+```json
+{
+  "key": "pull_observability_signals",
+  "label": "Pulling observability signals",
+  "state": "retrying",
+  "retry_note": "TrueFoundry rate-limited the request. Retrying attempt 2 of 3.",
+  "started_at": "2026-06-05T19:12:00Z",
+  "completed_at": null
+}
+```
 
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS and realtime subscriptions. |
-| `job_id` | `uuid fk jobs.id` | |
-| `phase_order` | `integer not null` | |
-| `label` | `text not null` | Examples: reading code, scanning logs, opening PR. |
-| `state` | `job_phase_state not null default 'pending'` | |
-| `retry_note` | `text null` | Visible retry explanation. |
-| `started_at`, `completed_at` | `timestamptz null` | |
-
-Unique: `(job_id, phase_order)`.
-
-### `job_attempts`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS and worker queries. |
-| `job_id` | `uuid fk jobs.id` | |
-| `attempt_number` | `integer not null` | |
-| `state` | `job_state not null` | |
-| `locked_by` | `text null` | Worker that executed this attempt. |
-| `started_at`, `completed_at` | `timestamptz null` | |
-| `error_code` | `text null` | |
-| `error_summary` | `text null` | |
-| `backoff_until` | `timestamptz null` | |
-
-Unique: `(job_id, attempt_number)`.
+`jobs.attempts` replaces the earlier `job_attempts` table. Keep this array
+bounded to the configured retry count and use `attempt_count`, `next_run_at`,
+`error_code`, and `error_summary` for worker queries and list views.
 
 ### `job_audit_events`
 
@@ -835,6 +794,8 @@ Proactive, alert, and PR-review recommendations.
 | `affected_code_path` | `text null` | |
 | `affected_runtime_path` | `text null` | Endpoint, queue, job, dashboard panel, etc. |
 | `proposed_next_step` | `text not null` | |
+| `steps` | `jsonb not null default '[]'` | Ordered dependent step objects for the demo UI and workflow state. |
+| `steps_schema_version` | `text not null default 'recommendation_steps.v1'` | Version for validating `steps` JSON. |
 | `confidence` | `confidence_level null` | Optional for recs. |
 | `dedupe_fingerprint` | `text not null` | Stable across scans for REC-7. |
 | `context_hash` | `text null` | Code/monitor context used to detect staleness. |
@@ -849,40 +810,27 @@ Proactive, alert, and PR-review recommendations.
 Unique active dedupe: `(workspace_id, category, dedupe_fingerprint)` with app logic
 to update `last_seen_scan_id` instead of creating duplicates.
 
-### `recommendation_steps`
+`recommendations.steps` replaces the earlier `recommendation_steps` table for
+the demo. Each step object should include:
 
-Ordered dependent workflow for each recommendation.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS. |
-| `recommendation_id` | `uuid fk recommendations.id` | |
-| `step_order` | `integer not null` | 1-based order. |
-| `kind` | `recommendation_step_kind not null` | |
-| `state` | `recommendation_step_state not null default 'available'` | Dependent steps start `locked`. |
-| `required` | `boolean not null default true` | Required steps must be complete before the recommendation can be accepted. |
-| `prerequisite_step_id` | `uuid fk recommendation_steps.id null` | Locks later steps. |
-| `label` | `text not null` | UI step label. |
-| `target_provider` | `integration_provider null` | GitHub or Datadog for writes. |
-| `proposed_payload` | `jsonb not null default '{}'` | PR plan, monitor config, dashboard panel plan, etc. |
-| `configuration_diff` | `jsonb null` | Required for monitor improvements. |
-| `verification_state` | `metric_existence_state null` | For alert steps: metric verified, expected after prerequisite, or unverified. |
-| `job_id` | `uuid fk jobs.id null` | Current generation/application job. |
-| `completion_source` | `step_completion_source null` | How the step was completed. |
-| `completion_evidence_id` | `uuid fk evidence_items.id null` | PR merge, Datadog monitor, manual proof, etc. |
-| `completed_by` | `uuid fk auth.users.id null` | Null for system-detected completions. |
-| `completed_at` | `timestamptz null` | |
-| `created_at`, `updated_at` | `timestamptz` | |
-
-Unique: `(recommendation_id, step_order)`.
+- `key`: stable per-recommendation key, such as `add_queue_depth_metric`.
+- `order`: 1-based display order.
+- `kind`: one of the `recommendation_step_kind` JSON vocabulary values.
+- `state`: one of the `recommendation_step_state` JSON vocabulary values.
+- `required`: boolean; required steps must be complete before acceptance.
+- `prerequisite_step_key`: nullable key that locks dependent steps.
+- `label`, `target_provider`, and `proposed_payload`.
+- `configuration_diff` for Datadog monitor-change review drawers.
+- `verification_state`, `metric_name`, and `metric_evidence_id` for alert steps.
+- `job_id`, `completion_source`, `completion_evidence_id`, `completed_by`, and
+  `completed_at` when a step is in flight or done.
 
 Acceptance rule: a recommendation becomes `accepted` only after all required
-steps are `done`; opening a PR is not enough unless the step is explicitly a
-non-mutating/manual record. `datadog_monitor_change` is a reviewable diff for
-the demo and should complete via `external_monitor_change` or `manual_mark`
-unless the product scope is later expanded to let Instrument mutate existing
-monitors.
+step objects are `done`; opening a PR is not enough unless the step is
+explicitly a non-mutating/manual record. `datadog_monitor_change` is a
+reviewable diff for the demo and should complete via `external_monitor_change`
+or `manual_mark` unless the product scope is later expanded to let Instrument
+mutate existing monitors.
 
 ### `recommendation_events`
 
@@ -908,7 +856,8 @@ Generated PRs for approved code-based recommendation steps.
 | --- | --- | --- |
 | `id` | `uuid pk` | |
 | `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS. |
-| `recommendation_step_id` | `uuid fk recommendation_steps.id` | |
+| `recommendation_id` | `uuid fk recommendations.id` | |
+| `step_key` | `text not null` | Stable key inside `recommendations.steps`. |
 | `repository_id` | `uuid fk repositories.id` | |
 | `github_pull_request_id` | `uuid fk github_pull_requests.id null` | Linked after the PR is opened/synced. |
 | `job_id` | `uuid fk jobs.id` | |
@@ -921,6 +870,7 @@ Generated PRs for approved code-based recommendation steps.
 | `title` | `text not null` | |
 | `summary` | `text not null` | |
 | `changed_files` | `text[] not null default '{}'` | |
+| `file_change_summaries` | `jsonb not null default '[]'` | Per-file hash/excerpt/write-state summaries for retry/audit. |
 | `external_pr_number` | `integer null` | |
 | `external_pr_id` | `text null` | |
 | `html_url` | `text null` | |
@@ -929,26 +879,9 @@ Generated PRs for approved code-based recommendation steps.
 | `created_at`, `updated_at` | `timestamptz` | |
 
 Unique: `(repository_id, branch_name)`.
-
-### `generated_pr_file_changes`
-
-Per-file generated change state so a retry can resume after a branch or partial
-file write succeeds.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | |
-| `generated_pull_request_id` | `uuid fk generated_pull_requests.id` | |
-| `file_path` | `text not null` | |
-| `change_kind` | `text not null` | `create`, `update`, `delete`. |
-| `patch_hash` | `text not null` | Full patch may stay in GitHub; hash supports audit/idempotency. |
-| `patch_excerpt` | `text null` | Small UI-safe excerpt. |
-| `write_state` | `external_action_state not null default 'planned'` | |
-| `external_write_action_id` | `uuid fk external_write_actions.id null` | File write action, if separate from PR create. |
-| `created_at`, `updated_at` | `timestamptz` | |
-
-Unique: `(generated_pull_request_id, file_path)`.
+`generated_pull_requests.file_change_summaries` replaces the earlier
+`generated_pr_file_changes` table. Store only UI-safe file path, change kind,
+patch hash/excerpt, write state, and optional `external_write_action_id`.
 
 ### `generated_datadog_monitors`
 
@@ -958,7 +891,8 @@ Generated alert/monitor records for approved alert recommendation steps.
 | --- | --- | --- |
 | `id` | `uuid pk` | |
 | `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS. |
-| `recommendation_step_id` | `uuid fk recommendation_steps.id` | |
+| `recommendation_id` | `uuid fk recommendations.id` | |
+| `step_key` | `text not null` | Stable key inside `recommendations.steps`. |
 | `datadog_monitor_id` | `uuid fk datadog_monitors.id null` | Cached resulting monitor when synced. |
 | `job_id` | `uuid fk jobs.id` | |
 | `approval_id` | `uuid fk approvals.id` | Required. |
@@ -1001,28 +935,10 @@ Cached monitor config/status from Datadog.
 
 Unique: `(workspace_id, external_monitor_id)`.
 
-### `observed_metrics`
-
-Metric existence and prerequisite tracking for alert recommendations.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | |
-| `service_id` | `uuid fk services.id null` | |
-| `metric_name` | `text not null` | |
-| `source` | `text not null` | `datadog`, `code_expected`, `truefoundry`. |
-| `existence_state` | `metric_existence_state not null` | Alert recommendations only proceed when verified or explicitly dependent on a prerequisite step. |
-| `tags` | `jsonb null` | Datadog tag metadata. |
-| `first_seen_at`, `last_seen_at` | `timestamptz null` | |
-| `evidence_id` | `uuid fk evidence_items.id null` | |
-| `required_by_step_id` | `uuid fk recommendation_steps.id null` | For dependent alert steps. |
-| `provided_by_step_id` | `uuid fk recommendation_steps.id null` | Instrumentation step that will add it. |
-
-Unique: `(workspace_id, metric_name, service_id)`.
-When `service_id` is nullable, use `NULLS NOT DISTINCT` on Postgres 15+ or a
-sentinel/functional unique index so service-unknown duplicate metrics do not
-accumulate.
+Metric existence and prerequisite tracking lives on
+`recommendations.steps[].verification_state` plus linked `evidence_items` for
+the demo. Add a normalized `observed_metrics` table later only if metric
+inventory becomes a reusable product surface.
 
 ### `datadog_alert_events`
 
@@ -1089,6 +1005,10 @@ Created/updated from authenticated Datadog alert webhooks.
 | `investigation_job_id` | `uuid fk jobs.id null` | Current/last investigation. |
 | `investigation_start_mode_snapshot` | `investigation_start_mode not null` | Captured at creation. |
 | `started_automatically` | `boolean not null default false` | UI badge. |
+| `signals` | `jsonb not null default '[]'` | Key signal objects for the side rail, with evidence IDs when available. |
+| `timeline` | `jsonb not null default '[]'` | Ordered timeline events shown in incident detail. |
+| `hypotheses` | `jsonb not null default '[]'` | Ranked validated RCA output with confidence and evidence IDs. |
+| `correlated_changes` | `jsonb not null default '[]'` | Commit/PR/change pointers used for deploy correlation. |
 | `started_at` | `timestamptz not null` | Alert start. |
 | `resolved_at` | `timestamptz null` | |
 | `created_at`, `updated_at` | `timestamptz` | |
@@ -1097,81 +1017,13 @@ Partial unique index for active incidents:
 `(workspace_id, incident_correlation_key)` where `incident_state = 'active'`.
 Do not rely on nullable `service_id` for uniqueness.
 
-### `incident_signals`
-
-Key signal rows shown in the side rail.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS/realtime subscriptions. |
-| `incident_id` | `uuid fk incidents.id` | |
-| `label` | `text not null` | Example: `p99 latency`. |
-| `value` | `text not null` | UI-formatted value. |
-| `numeric_value` | `numeric null` | Optional for sorting/calculation. |
-| `unit` | `text null` | |
-| `source_provider` | `integration_provider not null` | Usually `datadog` or `truefoundry`. |
-| `evidence_id` | `uuid fk evidence_items.id null` | |
-| `observed_at` | `timestamptz null` | |
-
-### `incident_timeline_events`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS/realtime subscriptions. |
-| `incident_id` | `uuid fk incidents.id` | |
-| `kind` | `text not null` | `alert`, `instrument_action`, `finding`, `resolution`, `error`. |
-| `occurred_at` | `timestamptz not null` | |
-| `title` | `text not null` | |
-| `description` | `text null` | |
-| `job_id` | `uuid fk jobs.id null` | |
-| `evidence_id` | `uuid fk evidence_items.id null` | |
-
-### `incident_hypotheses`
-
-Structured RCA output.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS/realtime subscriptions. |
-| `incident_id` | `uuid fk incidents.id` | |
-| `rank` | `integer not null` | 1 is leading. |
-| `title` | `text not null` | |
-| `reasoning` | `text not null` | Distinguish facts/inference/action. |
-| `confidence` | `confidence_level not null` | UI labels: High, Likely, Low. |
-| `is_leading` | `boolean not null default false` | |
-| `root_cause_type` | `text null` | `code`, `runtime_config`, `upstream`, `unknown`. |
-| `fixable_by_instrument` | `boolean not null default false` | Incident fix PRs are future scope; currently used to explain no code fix. |
-| `no_fix_reason` | `text null` | Required when not fixable and complete. |
-| `suggested_next_step` | `text null` | |
-| `validated_schema_version` | `text not null` | AI output schema version. |
-| `created_by_model_call_id` | `uuid fk ai_model_calls.id null` | |
-| `created_at` | `timestamptz not null` | |
-
-Unique: `(incident_id, rank)`.
-
-### `incident_correlated_changes`
-
-First-class links from incidents to the commits/PRs/diffs Instrument used for
-correlation. The UI can render the "correlated code change" block from this
-table plus linked evidence.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | |
-| `incident_id` | `uuid fk incidents.id` | |
-| `repository_id` | `uuid fk repositories.id null` | |
-| `pull_request_id` | `uuid fk github_pull_requests.id null` | |
-| `commit_id` | `uuid fk github_commits.id null` | |
-| `relationship` | `text not null` | `possible_cause`, `ruled_out`, `related_deploy`, `resolution`. |
-| `confidence` | `confidence_level null` | |
-| `evidence_id` | `uuid fk evidence_items.id null` | Code diff, commit, or PR evidence. |
-| `created_at` | `timestamptz not null` | |
-
-At least one of `pull_request_id` or `commit_id` should be non-null.
+`incidents.signals`, `incidents.timeline`, `incidents.hypotheses`, and
+`incidents.correlated_changes` replace the earlier incident child tables for the
+demo. Keep each object compact, UI-safe, and evidence-backed via embedded
+`evidence_id` or `evidence_ids` fields. `hypotheses` must still validate against
+the incident output schema and include rank, title, reasoning, confidence,
+`root_cause_type`, `fixable_by_instrument`, `no_fix_reason` when needed, and
+`suggested_next_step`.
 
 ### `telemetry_emissions`
 
@@ -1183,10 +1035,10 @@ error telemetry used by the TrueFoundry/Datadog demo.
 | `id` | `uuid pk` | |
 | `workspace_id` | `uuid fk workspaces.id` | |
 | `job_id` | `uuid fk jobs.id null` | |
-| `job_attempt_id` | `uuid fk job_attempts.id null` | |
+| `attempt_number` | `integer null` | Mirrors the relevant entry in `jobs.attempts` when available. |
 | `integration_id` | `uuid fk integrations.id null` | Source integration involved in the failure/retry. |
 | `metric_name` | `text not null` | Example: `instrument.job.retry`. |
-| `tags` | `jsonb not null default '{}'` | Must include service/environment/workflow/error tags needed for Datadog routing. |
+| `tags` | `jsonb not null default '{}'` | Must include service/environment/workflow/error tags needed for Datadog routing. Avoid raw `job_id` as a Datadog metric tag; correlate job IDs app-side using trace/request IDs and time windows. |
 | `value` | `numeric not null default 1` | |
 | `truefoundry_trace_id` | `text null` | |
 | `truefoundry_request_id` | `text null` | |
@@ -1210,6 +1062,11 @@ All evidence cited by recommendations, PR comments, and hypotheses.
 | `source_provider` | `integration_provider null` | |
 | `collected_by_job_id` | `uuid fk jobs.id null` | |
 | `mcp_tool_invocation_id` | `uuid fk mcp_tool_invocations.id null` | |
+| `ai_model_call_id` | `uuid fk ai_model_calls.id null` | Set when cited or produced by a model call. |
+| `subject_type` | `text not null` | `recommendation`, `incident`, `pr_review_comment`, `job`, etc. |
+| `subject_id` | `uuid not null` | App-enforced polymorphic subject. |
+| `subject_key` | `text null` | Optional nested key, such as recommendation step key or hypothesis rank. |
+| `claim_type` | `text not null default 'fact'` | `fact`, `inference_support`, `suggested_action_support`, `counter_evidence`. |
 | `external_id` | `text null` | Commit SHA, monitor ID, trace ID, response ID, etc. |
 | `uri` | `text null` | GitHub/Datadog/TrueFoundry URL if available. |
 | `title` | `text not null` | Human-readable citation title. |
@@ -1221,23 +1078,16 @@ All evidence cited by recommendations, PR comments, and hypotheses.
 | `collected_at` | `timestamptz not null` | |
 
 Index: `(workspace_id, source_type, external_id)`.
+Index: `(workspace_id, subject_type, subject_id)`.
 
-### `evidence_links`
-
-Polymorphic join from evidence to the entity it supports. The app enforces that
-`subject_type`/`subject_id` points to one of the supported tables.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | Duplicated for direct RLS. |
-| `evidence_id` | `uuid fk evidence_items.id` | |
-| `subject_type` | `text not null` | `recommendation`, `recommendation_step`, `incident`, `incident_hypothesis`, `pr_review_comment`. |
-| `subject_id` | `uuid not null` | |
-| `claim_type` | `text not null` | `fact`, `inference_support`, `suggested_action_support`, `counter_evidence`. |
-| `created_at` | `timestamptz not null` | |
-
-Unique: `(evidence_id, subject_type, subject_id, claim_type)`.
+`evidence_items` intentionally replaces the earlier `evidence_links`,
+`truefoundry_metric_queries`, and `truefoundry_spans` tables for the demo. If
+one external fact supports multiple subjects, duplicate a compact evidence item
+or write a second item with the same `content_hash`; avoid building a many-to-
+many evidence join until the product needs it. Store TrueFoundry metric query
+envelopes, metric results, request-log excerpts, and span pointers in
+`payload` with a `source_type` of `truefoundry_metric`, `truefoundry_log`, or
+`datadog_trace` as appropriate.
 
 ### `ai_model_calls`
 
@@ -1272,52 +1122,6 @@ TrueFoundry Agent API; non-tool structured calls may use the Responses API.
 | `error_code`, `error_summary` | `text null` | Redacted. |
 | `started_at`, `completed_at` | `timestamptz` | |
 
-### `truefoundry_metric_queries`
-
-Stores model/MCP metric API snapshots used by the app.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | |
-| `integration_id` | `uuid fk integrations.id` | TrueFoundry integration. |
-| `job_id` | `uuid fk jobs.id null` | |
-| `mcp_tool_invocation_id` | `uuid fk mcp_tool_invocations.id null` | Set when fetched through the Instrument observability MCP server. |
-| `query_template_name` | `text null` | Approved internal template used by the MCP tool or worker. |
-| `datasource` | `text not null` | `modelMetrics` or `mcpMetrics`. |
-| `query_type` | `text not null` | `distribution` or `timeseries`. |
-| `start_ts`, `end_ts` | `timestamptz not null` | |
-| `aggregations` | `jsonb not null` | Request aggregations. |
-| `group_by` | `text[] null` | Example: `modelName`, `toolName`, `metadata.environment`. |
-| `filters` | `jsonb null` | Request filters. |
-| `interval_seconds` | `integer null` | Required for timeseries. |
-| `result` | `jsonb not null` | Bounded result snapshot. |
-| `fetched_at` | `timestamptz not null` | |
-
-### `truefoundry_spans`
-
-Normalized pointer to spans fetched from TrueFoundry request logs.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | `uuid pk` | |
-| `workspace_id` | `uuid fk workspaces.id` | |
-| `integration_id` | `uuid fk integrations.id` | TrueFoundry integration. |
-| `job_id` | `uuid fk jobs.id null` | |
-| `mcp_tool_invocation_id` | `uuid fk mcp_tool_invocations.id null` | Set when fetched through the Instrument observability MCP server. |
-| `query_template_name` | `text null` | Approved internal template used by the MCP tool or worker. |
-| `trace_id` | `text not null` | |
-| `span_id` | `text not null` | |
-| `parent_span_id` | `text null` | |
-| `span_name` | `text not null` | |
-| `span_type` | `text null` | From `tfy.span_type` when available. |
-| `attributes` | `jsonb not null default '{}'` | Redacted and bounded. |
-| `started_at`, `ended_at` | `timestamptz null` | |
-| `evidence_id` | `uuid fk evidence_items.id null` | |
-| `fetched_at` | `timestamptz not null` | |
-
-Unique: `(workspace_id, trace_id, span_id)`.
-
 ## Approvals and External Writes
 
 ### `approvals`
@@ -1329,9 +1133,10 @@ external writes except automatic GitHub PR review comments.
 | --- | --- | --- |
 | `id` | `uuid pk` | |
 | `workspace_id` | `uuid fk workspaces.id` | |
-| `action_type` | `text not null` | `generate_recommendation_pr`, `create_datadog_monitor`, `publish_datadog_monitor`, `mark_external_monitor_change`. |
-| `target_type` | `text not null` | Usually `recommendation_step`. |
+| `action_type` | `text not null` | `generate_recommendation_pr`, `create_datadog_monitor`, `mark_external_monitor_change`. |
+| `target_type` | `text not null` | Usually `recommendation`. |
 | `target_id` | `uuid not null` | |
+| `target_step_key` | `text null` | Stable key inside `recommendations.steps` when approving a step action. |
 | `requested_by` | `uuid fk auth.users.id null` | |
 | `approved_by` | `uuid fk auth.users.id null` | |
 | `state` | `approval_state not null default 'requested'` | |
@@ -1353,7 +1158,7 @@ main audit table for SEC-4/SEC-5.
 | `job_id` | `uuid fk jobs.id null` | |
 | `mcp_tool_invocation_id` | `uuid fk mcp_tool_invocations.id null` | If executed through MCP. |
 | `provider` | `integration_provider not null` | |
-| `action_kind` | `text not null` | `github_review_comment`, `github_create_branch`, `github_update_file`, `github_create_pr`, `datadog_create_monitor`, `datadog_publish_monitor`. |
+| `action_kind` | `text not null` | `github_review_comment`, `github_create_branch`, `github_update_file`, `github_create_pr`, `datadog_create_monitor`. `datadog_publish_monitor` is future scope. |
 | `idempotency_key` | `text not null` | Required. |
 | `target_summary` | `text not null` | UI-safe target. |
 | `request_hash` | `text not null` | Must match `approvals.approved_payload_hash` for approval-gated actions. |
@@ -1366,10 +1171,13 @@ main audit table for SEC-4/SEC-5.
 | `error_code`, `error_summary` | `text null` | |
 
 Unique: `(workspace_id, provider, action_kind, idempotency_key)`.
-Database trigger requirement: all `external_write_actions` except
-`github_review_comment` must reference an `approved` and unrevoked approval, and
-`request_hash` must equal `approvals.approved_payload_hash`. This prevents an
-approved preview from drifting before execution.
+Demo enforcement requirement: the external action executor must reject every
+`external_write_actions` row except `github_review_comment` unless it references
+an `approved` and unrevoked approval, and `request_hash` equals
+`approvals.approved_payload_hash`. This prevents an approved preview from
+drifting before execution. A database trigger can enforce the same invariant
+later, but for the demo keep the rule in worker code to reduce migration and
+trigger-debugging risk.
 
 ### `app_events`
 
@@ -1398,26 +1206,26 @@ Index: `(workspace_id, topic, visible_after desc)`.
   `pr_review_findings`, `pr_review_comments`, `recommendations`,
   `external_write_actions`, and `mcp_tool_invocations`.
 - Recommendation lifecycle and archive: `recommendations`,
-  `recommendation_steps`, `recommendation_events`, `generated_pull_requests`,
-  `generated_pr_file_changes`, and `generated_datadog_monitors`.
-- Multi-step dependent recommendations: `recommendation_steps.step_order` and
-  `recommendation_steps.prerequisite_step_id`.
-- Datadog alert recommendations: `observed_metrics`, `datadog_monitors`,
-  `recommendation_steps.configuration_diff`, `generated_datadog_monitors`, and
-  `approvals`.
+  `recommendations.steps`, `recommendation_events`, `generated_pull_requests`,
+  and `generated_datadog_monitors`.
+- Multi-step dependent recommendations: `recommendations.steps[].order` and
+  `recommendations.steps[].prerequisite_step_key`.
+- Datadog alert recommendations: `datadog_monitors`,
+  `recommendations.steps[].configuration_diff`,
+  `recommendations.steps[].verification_state`, `generated_datadog_monitors`,
+  `evidence_items`, and `approvals`.
 - Datadog incident ingestion and investigation: `inbound_webhooks`, `incidents`,
-  `datadog_alert_events`, `incident_signals`, `incident_timeline_events`,
-  `incident_hypotheses`, `incident_correlated_changes`, `jobs`, and
+  `datadog_alert_events`, `incidents.signals`, `incidents.timeline`,
+  `incidents.hypotheses`, `incidents.correlated_changes`, `jobs`, and
   `evidence_items`.
-- Durable progress/retry/failure states: `jobs`, `job_phases`,
-  `job_attempts`, `job_audit_events`.
-- Evidence and confidence: `evidence_items`, `evidence_links`,
-  `ai_model_calls`, `incident_hypotheses`.
-- Integration health: `integrations`, `integration_status_events`,
-  `mcp_servers`.
-- TrueFoundry reliability demo: `jobs` in `retrying`, `job_attempts`,
-  `telemetry_emissions`, `truefoundry_metric_queries`, `truefoundry_spans`,
-  `ai_model_calls`, `incident_signals`, and `evidence_items`.
+- Durable progress/retry/failure states: `jobs.phases`, `jobs.attempts`,
+  `jobs.progress_version`, and `job_audit_events`.
+- Evidence and confidence: `evidence_items`, `ai_model_calls`, and
+  `incidents.hypotheses`.
+- Integration health: `integrations` and `mcp_servers`.
+- TrueFoundry reliability demo: `jobs` in `retrying`, `jobs.attempts`,
+  `telemetry_emissions`, `ai_model_calls`, `mcp_tool_invocations`,
+  `incidents.signals`, and `evidence_items`.
 - Live console updates and debouncing: `app_events` plus `jobs.progress_version`.
 
 ## RLS and Security Notes
@@ -1426,10 +1234,9 @@ Index: `(workspace_id, topic, visible_after desc)`.
 - Policy pattern for normal users:
   `exists (select 1 from workspace_members wm where wm.workspace_id = <table>.workspace_id and wm.user_id = auth.uid())`.
 - Prefer carrying `workspace_id` directly on user-readable child tables,
-  including job phases/attempts, PR review comments, evidence links, incident
-  children, generated PR file changes, and app events. If a child table omits
-  `workspace_id`, write a parent-join RLS policy and add cross-workspace
-  consistency checks.
+  including PR review comments, generated artifacts, evidence, and app events.
+  Display-only child collections live inside parent `jsonb` columns for the
+  demo and inherit the parent's RLS.
 - Background workers, webhook handlers, and scheduled jobs should run with an
   InsForge server/service role and must still write `workspace_id`.
 - Never put provider tokens, API keys, Datadog application keys, webhook secrets,
@@ -1438,8 +1245,9 @@ Index: `(workspace_id, topic, visible_after desc)`.
 - `inbound_webhooks.signature_valid` must be true before downstream incident/job
   creation.
 - `external_write_actions.approval_id` must be non-null for mutating actions
-  except `github_review_comment`. Enforce this with a database trigger that also
-  checks approval state and request hash.
+  except `github_review_comment`. For the demo, enforce approval state and
+  request-hash equality in the external action executor; add a database trigger
+  later only if this flow needs stronger defense-in-depth.
 - Automatic PR comments must be scoped by `repositories.pr_review_enabled`,
   workspace settings, and repository allowlist config.
 - Webhook processing should only create incidents/jobs after signature or shared
@@ -1450,10 +1258,10 @@ Index: `(workspace_id, topic, visible_after desc)`.
 
 - `jobs(workspace_id, state, next_run_at, lease_expires_at)` for worker polling.
 - `jobs(workspace_id, target_type, target_id, job_type)` for UI hydration.
-- `job_phases(job_id, phase_order)`.
+- `jobs(workspace_id, target_type, target_id, target_step_key, job_type)` for
+  step-level recommendation jobs when `target_step_key is not null`.
 - `recommendations(workspace_id, state, category, updated_at desc)`.
 - `recommendations(workspace_id, dedupe_fingerprint)`.
-- `recommendation_steps(recommendation_id, step_order)`.
 - `pr_review_findings(pull_request_id, semantic_fingerprint)` unique.
 - `pr_review_comments(finding_id)` partial unique where `status in ('posted','resolved')`.
 - `github_push_events(repository_id, before_sha, after_sha, ref)` unique.
@@ -1462,10 +1270,9 @@ Index: `(workspace_id, topic, visible_after desc)`.
 - `incidents(workspace_id, incident_state, started_at desc)`.
 - `incidents(workspace_id, alert_state, updated_at desc)`.
 - `incidents(workspace_id, incident_correlation_key)` partial unique where `incident_state = 'active'`.
-- `evidence_links(subject_type, subject_id)`.
+- `evidence_items(workspace_id, subject_type, subject_id)`.
 - `mcp_tool_invocations(workspace_id, truefoundry_trace_id)`.
 - `ai_model_calls(workspace_id, truefoundry_response_id)`.
-- `truefoundry_spans(workspace_id, trace_id)`.
 - `inbound_webhooks(provider, external_delivery_id)` unique.
 - `external_write_actions(workspace_id, provider, action_kind, idempotency_key)`
   unique.
@@ -1503,8 +1310,9 @@ The ERD assumes these are supplied outside the database:
 - Demo Datadog monitor(s) that trigger on Instrument/TrueFoundry retry/error
   telemetry, unless monitor publishing is implemented after human approval.
 - Telemetry tags/attributes for the reliability demo, including service,
-  environment, job ID or workflow ID, integration source, error/rate-limit code,
-  and trace/request IDs.
+  environment, stable workflow name, integration source, error/rate-limit code,
+  and trace/request IDs. Avoid raw job IDs as Datadog metric tags; use
+  application-side correlation to set `incidents.caused_by_job_id`.
 
 ## Webhook Payload Alignment
 
@@ -1589,7 +1397,8 @@ Mapping rules:
 - Configure Datadog webhook payload JSON explicitly with the variables listed in
   `datadog_alert_events`; Datadog does not send a fixed alert JSON envelope.
 - Implement job workers with transactional leases or `for update skip locked`;
-  a browser refresh should only read `jobs` and `job_phases`, never restart work.
+  a browser refresh should only read `jobs.phases`, `jobs.attempts`, and related
+  aggregate rows, never restart work.
 - For PR review, compute `semantic_fingerprint` from repository ID, PR number,
   semantic issue type, file path, stable code anchor, and normalized proposed fix
   summary. Do not include `head_sha` or raw line number in the cross-revision
@@ -1597,8 +1406,9 @@ Mapping rules:
 - For recommendations, compute `dedupe_fingerprint` from category, service,
   code/runtime path, metric/monitor name if any, and normalized proposed action.
 - For AI output, validate the structured response before writing
-  `recommendations`, `pr_review_findings`, `pr_review_comments`, or
-  `incident_hypotheses`, and require evidence links before display/post.
+  `recommendations`, `recommendations.steps`, `pr_review_findings`,
+  `pr_review_comments`, or `incidents.hypotheses`, and require evidence items
+  before display/post.
 - Store enough redacted provider payload to explain what happened, but prefer
   `evidence_items` and external URLs over large raw blobs.
 - Treat Datadog ownership, criticality, and notification routing as optional
@@ -1626,10 +1436,10 @@ Mapping rules:
   TrueFoundry HTTP APIs internally, enforce approved query templates and bounded
   time windows, and return compact structured results. The Agent API caller/job
   worker parses streamed tool call/result events and persists
-  `mcp_tool_invocations`, `truefoundry_metric_queries`, `truefoundry_spans`, and
-  `evidence_items` after the call. Server-side jobs may still prefetch the same
-  tables for deterministic workflows, but tool-using investigations should
-  prefer the custom MCP server.
+  `mcp_tool_invocations` and cited metric/log/span snapshots as
+  `evidence_items` after the call. Server-side jobs may still prefetch evidence
+  for deterministic workflows, but tool-using investigations should prefer the
+  custom MCP server.
 - When parsing Agent API streams, store documented IDs when present but do not
   require `tool_call_id` or similar fields. The persistence fallback is the
   enclosing `job_id`, `ai_model_call_id`, MCP server FQN/tool name, stream event
