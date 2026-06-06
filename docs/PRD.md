@@ -6,7 +6,7 @@ Instrument is an AI SRE for software teams. It reads a team's codebase, GitHub a
 
 This PRD defines the product direction for Instrument and the first practical product slice to build. The long-term product is a code-aware reliability layer that continuously connects source code, operational telemetry, and human-approved remediation workflows. The first slice is intentionally scoped for a demonstrable end-to-end path, but it should be implemented as real product foundation rather than a presentation-only prototype.
 
-The initial product slice should prove one reliable-agent loop: Instrument reviews a GitHub PR, preserves and updates recommendations as code changes, generates a recommendation PR after human approval, survives a forced TrueFoundry/API rate-limit failure with durable retries, emits reliability telemetry, investigates the resulting Datadog incident with evidence, and generates a Datadog alert from an accepted recommendation. This carved-out scope exists to make the product shippable and verifiable early, while preserving the architecture and product concepts needed for broader use.
+The initial product slice should prove one reliable-agent loop: Instrument reviews a GitHub PR, preserves and updates recommendations as code changes, generates a recommendation PR after human approval, survives a forced TrueFoundry/API rate-limit failure with durable retries, emits reliability telemetry, investigates the resulting Datadog incident with evidence, and generates a draft Datadog monitor from an accepted recommendation. This carved-out scope exists to make the product shippable and verifiable early, while preserving the architecture and product concepts needed for broader use.
 
 Instrument does not replace Datadog, GitHub, or TrueFoundry. It connects those systems, adds code-aware reasoning, and presents actionable, evidence-backed recommendations in a web console.
 
@@ -22,7 +22,7 @@ The design reference is in `design/README.md`. The console prototype is under `d
 
 The console prototype is a visual reference and represents the target product direction, not a strict contract for every first-slice feature. Implementation should match the design intent for scoped surfaces where practical, but may deviate to satisfy this PRD, defer later product actions, add missing required states, or handle backend constraints. Any meaningful design deviation should be documented.
 
-Prototype comments may clarify product intent, but this PRD is the source of truth for product priorities and first-slice scope. Generated recommendation PRs and human-approved Datadog alert creation are included in the first product slice. Generated incident-fix PRs and arbitrary edits to existing Datadog monitors appear in the target-state prototype but are later product scope unless explicitly promoted.
+Prototype comments may clarify product intent, but this PRD is the source of truth for product priorities and first-slice scope. Generated recommendation PRs and human-approved draft Datadog monitor creation are included in the first product slice. Generated incident-fix PRs, actively publishing notifying Datadog monitors, and arbitrary edits to existing Datadog monitors appear in the target-state prototype but are later product scope unless explicitly promoted.
 
 The auth prototype is visual reference only for now. First-slice auth is limited to username/password login for a single configured workspace, as defined in Section 10.
 
@@ -62,7 +62,7 @@ The on-call engineer responds to alerts and needs fast, trustworthy incident con
 
 ### 5.2 Platform/SRE Owner
 
-The platform or SRE owner is responsible for improving observability quality across services. They use Instrument to review recommendations, accept or dismiss suggestions, generate recommendation PRs after approval, create approved Datadog alerts, and identify missing metrics, logs, spans, dashboard panels, or Datadog alerts.
+The platform or SRE owner is responsible for improving observability quality across services. They use Instrument to review recommendations, accept or dismiss suggestions, generate recommendation PRs after approval, create approved draft Datadog monitors, and identify missing metrics, logs, spans, dashboard panels, or Datadog alerts.
 
 ### 5.3 Application Engineer
 
@@ -93,9 +93,9 @@ Instrument uses Datadog to:
 - Read service ownership, criticality, and notification routing only when those fields exist in Datadog.
 - Suggest new monitors when important emitted metrics are not alerting.
 - Suggest improvements to existing monitors, such as threshold changes, missing tags, missing runbooks, noisy alerts, or missing notifications.
-- Create new Datadog alerts/monitors for accepted alert recommendations after explicit user approval.
+- Create new draft Datadog monitors for accepted alert recommendations after explicit user approval.
 
-Datadog remains the source of truth for monitor and alert state. Instrument must avoid suggesting alerts for metrics that it cannot verify exist or can be emitted by the relevant code path. Datadog traces and dashboards may be used when available, but monitors, logs, and metrics are the required Datadog scopes for the first product slice.
+Datadog remains the source of truth for monitor and alert state. Instrument must avoid suggesting alerts for metrics that it cannot verify exist or can be emitted by the relevant code path. Datadog traces and dashboards may be used when available, but monitors, logs, and metrics are the required Datadog scopes for the first product slice. For the first slice, generated Datadog monitors may remain draft/non-notifying monitors when the Datadog integration path supports draft creation but not publish-time notification behavior.
 
 ### 6.3 TrueFoundry
 
@@ -155,7 +155,7 @@ Requirements:
 - **REC-6**: Outdated recommendations must explain why they no longer apply.
 - **REC-7**: Instrument must deduplicate recommendations across scans so stable findings do not reappear as new items.
 - **REC-8**: Users must be able to view active recommendations and archived recommendations separately.
-- **REC-9**: A recommendation becomes `accepted` only when all required steps are completed, such as a recommendation PR being merged, a Datadog alert being created, a monitor change being applied outside Instrument, or a user marking a non-mutating step complete.
+- **REC-9**: A recommendation becomes `accepted` only when all required steps are completed, such as a recommendation PR being merged, a draft Datadog monitor being created, a monitor change being applied outside Instrument, or a user marking a non-mutating step complete.
 - **REC-10**: If a previously accepted or dismissed recommendation becomes invalid because code or monitor context changed, Instrument may mark it `outdated` and must preserve prior lifecycle history.
 - **REC-11**: Users must be able to generate a GitHub PR for an approved instrumentation recommendation when the change is code-based and safe to propose as a pull request.
 - **REC-12**: Generated recommendation PRs must include a clear branch name, PR title, summary, changed files, and evidence linking the PR back to the recommendation.
@@ -175,11 +175,11 @@ Requirements:
 - **ALERT-1**: Instrument must verify that a suggested metric exists in Datadog or is expected to exist only because a completed prerequisite instrumentation step added it.
 - **ALERT-2**: Instrument must distinguish between creating a new monitor and improving an existing monitor.
 - **ALERT-3**: Monitor improvement recommendations must show the proposed change as a reviewable configuration diff.
-- **ALERT-4**: Instrument must not create Datadog alerts or apply Datadog monitor changes without explicit human approval.
+- **ALERT-4**: Instrument must not create draft Datadog monitors or apply Datadog monitor changes without explicit human approval.
 - **ALERT-5**: Alert recommendations must cite relevant monitor configuration, metric evidence, alert history, or code paths.
 - **ALERT-6**: Service ownership, criticality, and notification routing must be read from Datadog when available. When this metadata is absent, Instrument must not fabricate it, require it, or block recommendations on it.
-- **ALERT-7**: Users must be able to accept a verified new-alert recommendation and generate the corresponding Datadog alert/monitor from the console.
-- **ALERT-8**: Generated Datadog alerts must show the proposed query, threshold, tags, service scope, notification targets when known, and resulting Datadog monitor link or identifier.
+- **ALERT-7**: Users must be able to accept a verified new-alert recommendation and generate the corresponding draft Datadog monitor from the console.
+- **ALERT-8**: Generated draft Datadog monitors must show the proposed query, threshold, tags, service scope, notification targets when known, draft state, and resulting Datadog monitor link or identifier.
 
 ### 7.4 Datadog Alert Ingestion and Incident Investigation
 
@@ -233,12 +233,12 @@ Requirements:
 
 Instrument's core workflows are long-running and must be executed by durable backend jobs, not browser-local state.
 
-Job examples include PR review analysis, proactive scans, recommendation generation, Datadog monitor analysis, Datadog alert generation, incident investigation, and recommendation PR generation.
+Job examples include PR review analysis, proactive scans, recommendation generation, draft Datadog monitor generation, incident investigation, and recommendation PR generation.
 
 Requirements:
 
 - **JOB-1**: Jobs must persist state so they survive browser refreshes, user navigation, backend restarts, and transient integration failures.
-- **JOB-2**: Job states must include at least `queued`, `running`, `retrying`, `failed`, `succeeded`, and `cancelled` where cancellation is supported.
+- **JOB-2**: Job states must include at least `queued`, `running`, `retrying`, `failed`, and `succeeded`. First-slice jobs do not require cancellation support.
 - **JOB-3**: Investigation display states derive from job state: no job maps to `new`; `queued`, `running`, and `retrying` map to `investigating`; `succeeded` maps to `complete`; terminal `failed` maps to `failed`.
 - **JOB-4**: Jobs must expose named progress phases suitable for the console, such as reading code, pulling observability signals, scanning logs, correlating commits, ranking hypotheses, drafting changes, running checks, and opening PRs.
 - **JOB-5**: Retryable external API failures must use bounded retries with backoff and visible retry notes.
@@ -275,7 +275,7 @@ Requirements:
 - **SEC-1**: Integration credentials must be stored securely and must not be logged in raw form.
 - **SEC-2**: First-slice auth must support username/password login for a single configured workspace.
 - **SEC-3**: Integration credentials may be provided through environment variables or local admin configuration; the first product slice does not require OAuth connection flows.
-- **SEC-4**: Human approval must be required before generating recommendation PRs, creating Datadog alerts, or taking other external write actions, except for automatic GitHub PR observability review comments.
+- **SEC-4**: Human approval must be required before generating recommendation PRs, creating draft Datadog monitors, or taking other external write actions, except for automatic GitHub PR observability review comments.
 - **SEC-5**: Automatic GitHub PR observability review comments do not require per-comment human approval, but must be scoped, deduplicated, auditable, and limited to configured repositories/workspaces where the workflow is enabled.
 - **SEC-6**: Users must be able to see when an integration is disconnected, degraded, rate-limited, or missing required credentials.
 - **SEC-7**: Inbound Datadog webhooks must be authenticated or signature-verified before they can create or update incidents.
@@ -285,7 +285,7 @@ Requirements:
 Required views:
 
 - **Incidents**: Active and resolved incident lists; investigation-start setting control; incident detail; investigation progress; failed investigation state; hypotheses; key signals; timeline; correlated code changes.
-- **Recommendations**: Active and archived recommendations; multi-step recommendation progress; PR review records; configuration change drawers; generated recommendation PR state; generated Datadog alert state.
+- **Recommendations**: Active and archived recommendations; multi-step recommendation progress; PR review records; configuration change drawers; generated recommendation PR state; generated draft Datadog monitor state.
 - **Integrations**: GitHub, Datadog, and TrueFoundry connection state.
 
 Requirements:
@@ -305,7 +305,7 @@ The first product slice must include:
 - Automatic GitHub PR observability review comments.
 - Active and archived recommendations, including multi-step recommendations, instrumentation recommendations, Datadog alert improvement recommendations, and PR review recommendations.
 - Human-approved GitHub PR generation for code-based instrumentation recommendations.
-- Human-approved Datadog alert generation for verified alert recommendations.
+- Human-approved draft Datadog monitor generation for verified alert recommendations.
 - Automatic scans on commits to the primary branch with a cooldown.
 - Datadog alert ingestion for the configured service, incident investigation, evidence display, resolved incident history, and smart investigation start.
 - Durable job state for long-running work, retries, live updates, refresh recovery, and backend restart recovery.
@@ -321,6 +321,8 @@ Later product iterations may add:
 - Incident grouping for alert storms across monitors, services, environments, tags, and time windows.
 - Generated GitHub PRs for incident fixes.
 - Applying arbitrary edits to existing Datadog monitors from the console.
+- Publishing actively notifying Datadog monitors from Instrument after draft creation.
+- User-facing job cancellation and richer job control.
 - Manual/on-demand recommendation scans and advanced scan scheduling.
 - Deeper Datadog traces, dashboards, service catalog, ownership, notification, and runbook workflows.
 - External notifications such as Slack, email, PagerDuty, or Datadog incident synchronization.
@@ -354,7 +356,7 @@ Later product iterations may add:
 - Given a recommendation requires a metric before an alert, the alert step remains locked until the metric step is complete.
 - Given an existing emitted metric has no monitor, Instrument suggests a Datadog alert and cites metric/code evidence.
 - Given a noisy Datadog monitor, Instrument suggests a specific threshold or configuration improvement and shows the proposed configuration diff.
-- Given the user accepts a verified Datadog alert recommendation, Instrument creates the Datadog alert/monitor after confirmation and shows the resulting Datadog link or identifier.
+- Given the user accepts a verified Datadog alert recommendation, Instrument creates the draft Datadog monitor after confirmation and shows the resulting Datadog link or identifier.
 - Given a metric cannot be verified, Instrument does not recommend a Datadog alert for it unless the recommendation explicitly depends on first adding that metric.
 - Given Datadog does not provide ownership, criticality, or notification routing for a service, Instrument omits that context instead of inferring it.
 - Given the backend restarts or the user refreshes during a running job, the console restores persisted job state without re-running the job.

@@ -6,16 +6,19 @@ Not started.
 
 ## Context
 
-The demo requires proactive recommendations from primary-branch scans with dedupe, lifecycle states, active/archive views, and dependent steps.
+The first product slice requires proactive recommendations from primary-branch
+scans with dedupe, lifecycle states, active/archive views, and dependent steps.
 
 Depends on Tasks 3, 4, 5, and 6 for webhook foundation.
 
 ## Requirements
 
 - Extend GitHub webhook handling for `push` events.
-- Record every push delivery in `inbound_webhooks` and normalized `github_push_events`.
+- Record every push delivery in `inbound_webhooks`; store push SHA/range and
+  coalescing metadata in `jobs.trigger_summary`.
 - Trigger proactive scans only for the configured primary branch.
-- Implement cooldown/coalescing using `workspace_settings.primary_branch_scan_cooldown_seconds`.
+- Implement cooldown/coalescing using
+  `workspaces.primary_branch_scan_cooldown_seconds`.
 - Enqueue `proactive_scan` and/or `recommendation_generation` jobs idempotently for the newest commit SHA after cooldown.
 - Read repository code, relevant service path mappings, existing recommendations, Datadog evidence, and PR review history.
 - Generate recommendations with:
@@ -26,15 +29,25 @@ Depends on Tasks 3, 4, 5, and 6 for webhook foundation.
   - affected service/code/runtime path
   - proposed next step
   - ordered dependent steps when needed
-- The overall recommendation system must support categories `instrumentation`, `alert`, and `pr_review`. Primary-branch scans usually create `instrumentation` and `alert` recommendations; `pr_review` recommendations are normally created by Task 6 and should be preserved/deduped correctly by lifecycle code.
+- The overall recommendation system must support categories `instrumentation`,
+  `alert`, and `pr_review`. Primary-branch scans own the
+  `recommendation_generation` jobs that create or update recommendations.
+  Datadog monitor/metric analysis from Task 9 plugs into these
+  `recommendation_generation` jobs; do not introduce a separate
+  `datadog_monitor_analysis` job type. `pr_review` recommendations are normally
+  created by Task 6 and should be preserved/deduped correctly by lifecycle code.
 - Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for model-assisted recommendation generation. Do not call model providers directly.
 - Validate recommendation output against structured schemas before display.
-- Persist `ai_model_calls` for generated recommendations and `mcp_tool_invocations` for any MCP-backed evidence collection.
+- Persist `ai_model_calls` for generated recommendations. Store MCP/tool
+  summaries in `ai_model_calls.tool_calls_redacted` and cited read outputs in
+  `evidence_items`.
 - Compute stable `dedupe_fingerprint` values and update existing recommendations instead of creating duplicates.
-- Preserve lifecycle history in `recommendation_events`.
+- Preserve lifecycle history in `recommendations.lifecycle_events`.
 - Move stale findings to `outdated` with `outdated_reason` when code or monitor context invalidates them.
 - Keep active and archived recommendations separated in the UI through Task 4 data surfaces.
-- Emit `app_events` when recommendations are created, updated, accepted, dismissed, restored, or marked outdated.
+- Update recommendation timestamps and relevant job `progress_version` values so
+  Task 4 polling can surface created, updated, accepted, dismissed, restored, or
+  outdated recommendations.
 
 ## Acceptance Criteria
 

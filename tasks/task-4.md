@@ -21,16 +21,20 @@ Depends on Tasks 1, 2, and 3.
   - No job -> `new`.
   - `queued`, `running`, `retrying` -> `investigating`.
   - `succeeded` -> `complete`.
-  - terminal `failed` and `cancelled` -> failed display state.
+  - terminal `failed` -> failed display state.
 - Add the failed investigation/job UI state required by the PRD: preserved progress, affected integration/source, error summary, and retry action when `safe_to_retry` is true.
 - Implement the investigation-start setting control with labels:
   - Manual
   - Automatic
   - Let Instrument decide
-- Persist setting changes in `workspace_settings` without disturbing investigations already in flight.
-- Implement simple polling against `app_events`, jobs, and current detail records while active work is visible.
-- Debounce in-console change notifications using `app_events.debounce_key`.
-- Keep generated recommendation PRs and generated Datadog alert states visible and linkable from recommendation detail/drawers.
+- Persist setting changes on `workspaces` without disturbing investigations
+  already in flight.
+- Implement simple polling against jobs, list/detail records, `updated_at`, and
+  `jobs.progress_version` while active work is visible.
+- Debounce in-console change notifications in application code; do not add an
+  `app_events` table for the first product slice.
+- Keep generated recommendation PRs and generated draft Datadog monitor states
+  visible and linkable from recommendation detail/drawers.
 
 ## Acceptance Criteria
 
@@ -55,7 +59,8 @@ Depends on Tasks 1, 2, and 3.
 - Switch between active/resolved incidents and open an incident detail.
 - Refresh during a seeded running job and confirm progress resumes.
 - Toggle investigation-start setting and confirm persisted value after refresh.
-- Simulate an `app_events` row and confirm the console surfaces the change without a full page reload.
+- Simulate a job or record `updated_at` / `progress_version` change and confirm
+  the console surfaces the change without a full page reload.
 
 ## Progress Notes
 

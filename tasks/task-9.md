@@ -6,31 +6,43 @@ Not started.
 
 ## Context
 
-The PRD requires alert recommendations and human-approved Datadog alert creation. The ERD notes that Datadog MCP `create_datadog_monitor` creates draft monitors that do not send notifications; publishing notifying monitors is future scope for the demo.
+The PRD requires alert recommendations and human-approved Datadog alert
+creation. The ERD notes that Datadog MCP `create_datadog_monitor` creates draft
+monitors that do not send notifications; publishing notifying monitors is future
+scope for the first product slice.
 
-Depends on Tasks 3, 4, 5, and 7.
+Depends on Tasks 3, 4, 5, and 7. Datadog monitor analysis plugs into the
+`recommendation_generation` jobs created by Task 7; do not add a separate
+`datadog_monitor_analysis` job type.
 
 ## Requirements
 
 - Read Datadog monitors, monitor configuration, alert history, metrics, logs, and service metadata where available.
-- Cache relevant monitor data in `datadog_monitors`.
+- Store relevant monitor snapshots and metric verification evidence in
+  `evidence_items` and recommendation step payloads; do not create a
+  `datadog_monitors` cache table for the first product slice.
 - Treat ownership, criticality, and notification routing as optional Datadog facts. Leave them null when absent.
 - Verify alert recommendation metrics:
   - `verified_in_datadog` when the metric exists now.
   - `expected_after_step` only when a completed prerequisite instrumentation step added the metric.
   - `unverified` metrics must not be used for new alert creation.
-- Generate alert recommendations that distinguish:
+- Within `recommendation_generation` jobs, generate alert recommendations that distinguish:
   - new monitor creation
   - existing monitor improvement
 - For existing monitor improvements, show a reviewable configuration diff, but do not mutate existing monitors from Instrument unless the PRD changes.
 - Add a confirmation flow for verified new-alert steps.
-- Create `approvals` and `generated_datadog_monitors` rows for approved new-alert recommendations.
+- Create `approvals` rows and store generated draft monitor state in the
+  relevant `recommendations.steps` object for approved new-alert
+  recommendations.
 - Enqueue and run a durable `datadog_alert_generation` job for approved new-alert recommendations; do not create Datadog monitors directly from browser state.
 - Execute Datadog draft monitor creation through the approved Datadog integration/MCP path.
 - Record `external_write_actions` for Datadog writes.
-- Store resulting Datadog monitor ID/link and `external_state = 'draft'`.
+- Store resulting Datadog monitor ID/link and `external_state = 'draft'` in the
+  recommendation step JSON.
 - Emit evidence items for monitor config, metric existence, alert history, and relevant code paths.
-- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for model-assisted monitor analysis. Persist `ai_model_calls` and any MCP-backed `mcp_tool_invocations`.
+- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for
+  model-assisted monitor analysis. Persist `ai_model_calls`, tool summaries in
+  `ai_model_calls.tool_calls_redacted`, and cited outputs as `evidence_items`.
 
 ## Acceptance Criteria
 
@@ -38,7 +50,9 @@ Depends on Tasks 3, 4, 5, and 7.
 - A metric that cannot be verified does not produce a creatable Datadog alert unless the step is locked behind a prerequisite metric instrumentation step.
 - Existing monitor improvements render as reviewable diffs and are manually completable/reviewable only.
 - Creating a new Datadog monitor requires explicit approval.
-- Approved creation results in a draft Datadog monitor record with query, threshold, tags, service scope, known notification targets, and Datadog link or identifier.
+- Approved creation stores a draft Datadog monitor result in the recommendation
+  step with query, threshold, tags, service scope, known notification targets,
+  and Datadog link or identifier.
 - Approved creation shows durable job progress and handles retry/failure through `jobs`, not browser-local state.
 - Recommendation step and lifecycle state update correctly after draft monitor creation.
 

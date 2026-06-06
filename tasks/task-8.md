@@ -6,7 +6,9 @@ Not started.
 
 ## Context
 
-Generated recommendation PRs are in demo scope, but only after explicit human approval. Incident fix PR generation is future scope and should not be implemented here.
+Generated recommendation PRs are in first-slice scope, but only after explicit
+human approval. Incident fix PR generation is future scope and should not be
+implemented here.
 
 Depends on Tasks 3, 4, 5, and 7.
 
@@ -17,13 +19,16 @@ Depends on Tasks 3, 4, 5, and 7.
 - Hash the approved redacted payload and require `external_write_actions.request_hash` to match it during execution.
 - Enqueue a `recommendation_pr_generation` job for the approved step.
 - Generate a clear branch name, PR title, summary, changed files, and evidence-linked PR body.
-- Create or reuse `generated_pull_requests` rows.
+- Store planned/generated PR state in the relevant `recommendations.steps`
+  object. After GitHub creates or syncs the PR, upsert `github_pull_requests`.
 - Execute provider writes idempotently:
   - create branch
   - create/update file(s)
   - create pull request
 - Record each external write in `external_write_actions`.
-- Persist patch hashes/excerpts and file change summaries, but leave GitHub as the source of truth for full diffs.
+- Persist patch hashes/excerpts and file change summaries in
+  `recommendations.steps`, but leave GitHub as the source of truth for full
+  diffs.
 - Update recommendation step state from available/generating/ready/done/failed.
 - Keep a generated PR step incomplete until the PR is actually merged or the user marks an allowed non-mutating step complete.
 - Sync generated PR state when GitHub reports opened, merged, closed, or stale.
@@ -35,7 +40,9 @@ Depends on Tasks 3, 4, 5, and 7.
 - Rejecting approval leaves the recommendation unchanged.
 - Approved PR generation shows named job phases and survives refresh.
 - A retryable provider failure does not duplicate branch/file/PR writes.
-- A generated PR record includes branch name, PR title, summary, changed files, and evidence linking back to the recommendation.
+- The generated PR step includes branch name, PR title, summary, changed files,
+  GitHub PR link/number when available, and evidence linking back to the
+  recommendation.
 - Opening a PR does not by itself mark the recommendation accepted.
 - Merging the generated PR marks the step done, and marks the recommendation accepted only if all required steps are done.
 
