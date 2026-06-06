@@ -33,6 +33,7 @@ Depends on Tasks 3, 4, and 5.
   - `manual`: wait for a human.
   - `auto`: enqueue investigation for every firing alert.
   - `smart`: enqueue for important/clear-cut demo alerts, such as the TrueFoundry reliability monitor or configured rule.
+- Smart mode must use pre-investigation alert metadata, monitor identity, tags, or `workspace_settings.smart_start_rules`. Do not copy the prototype's post-investigation confidence heuristic, because confidence is only known after investigation.
 - Mark automatically started investigations with `started_automatically = true`.
 - Emit `app_events` for incident creation, update, resolution, and investigation start.
 

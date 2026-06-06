@@ -4,29 +4,37 @@
 
 Instrument is an AI SRE for software teams. It reads a team's codebase, GitHub activity, and observability signals to find gaps in instrumentation, suggest better alerts, and help on-call engineers investigate incidents.
 
-This PRD defines the hackathon demo build, not the full product. The demo should tell one reliable-agent story: Instrument reviews a GitHub PR, preserves and updates recommendations as code changes, generates a recommendation PR after human approval, survives a forced TrueFoundry/API rate-limit failure with durable retries, emits reliability telemetry, investigates the resulting Datadog incident with evidence, and generates a Datadog alert from an accepted recommendation.
+This PRD defines the product direction for Instrument and the first practical product slice to build. The long-term product is a code-aware reliability layer that continuously connects source code, operational telemetry, and human-approved remediation workflows. The first slice is intentionally scoped for a demonstrable end-to-end path, but it should be implemented as real product foundation rather than a presentation-only prototype.
+
+The initial product slice should prove one reliable-agent loop: Instrument reviews a GitHub PR, preserves and updates recommendations as code changes, generates a recommendation PR after human approval, survives a forced TrueFoundry/API rate-limit failure with durable retries, emits reliability telemetry, investigates the resulting Datadog incident with evidence, and generates a Datadog alert from an accepted recommendation. This carved-out scope exists to make the product shippable and verifiable early, while preserving the architecture and product concepts needed for broader use.
 
 Instrument does not replace Datadog, GitHub, or TrueFoundry. It connects those systems, adds code-aware reasoning, and presents actionable, evidence-backed recommendations in a web console.
 
-The demo has three primary surfaces:
+The product has three primary surfaces:
 
 - **Incidents**: Datadog alerts become incidents that Instrument can investigate using codebase context, recent commits, Datadog monitors/logs/metrics, and TrueFoundry MCP/LLM logs.
 - **Recommendations**: Instrument proactively suggests observability improvements, including missing metrics, missing logs, missing spans, dashboard gaps, and Datadog monitor improvements.
 - **Integrations**: Users see preconfigured GitHub, Datadog, and TrueFoundry connection state and any degraded/missing credential state.
 
-## 2. Design Reference and Scope Notes
+## 2. Design Reference and Scope Model
 
 The design reference is in `design/README.md`. The console prototype is under `design/project/console/`; the auth prototype is under `design/project/auth.jsx`.
 
-The console prototype is a visual reference and represents the target product direction, not a strict demo contract. Implementation should match the design intent for demo surfaces where practical, but may deviate to satisfy this PRD, remove future product actions, add missing required states, or handle backend constraints. Any meaningful design deviation should be documented.
+The console prototype is a visual reference and represents the target product direction, not a strict contract for every first-slice feature. Implementation should match the design intent for scoped surfaces where practical, but may deviate to satisfy this PRD, defer later product actions, add missing required states, or handle backend constraints. Any meaningful design deviation should be documented.
 
-Prototype comments may clarify product intent, but this PRD is the source of truth for demo scope. Generated recommendation PRs and human-approved Datadog alert creation are in demo scope. Generated incident-fix PRs and arbitrary edits to existing Datadog monitors appear in the target-state prototype but are future product scope unless explicitly promoted later.
+Prototype comments may clarify product intent, but this PRD is the source of truth for product priorities and first-slice scope. Generated recommendation PRs and human-approved Datadog alert creation are included in the first product slice. Generated incident-fix PRs and arbitrary edits to existing Datadog monitors appear in the target-state prototype but are later product scope unless explicitly promoted.
 
-The auth prototype is visual reference only for now. Demo auth is limited to username/password login for a single configured workspace, as defined in Section 10.
+The auth prototype is visual reference only for now. First-slice auth is limited to username/password login for a single configured workspace, as defined in Section 10.
 
-The console design must add a failed job/investigation state consistent with the existing activity and progress patterns. The current prototype shows `new`, `investigating`, and `complete`; the demo must also show `failed` with preserved progress, affected integration/source, error context, and a safe retry action when retry is supported.
+The console design must add a failed job/investigation state consistent with the existing activity and progress patterns. The current prototype shows `new`, `investigating`, and `complete`; the first product slice must also show `failed` with preserved progress, affected integration/source, error context, and a safe retry action when retry is supported.
 
 Iconography should follow the Phosphor visual language. The exported design prototype uses a self-contained inline SVG layer for portability, but the production React app should use `@phosphor-icons/react` while matching the prototype's icon choices, weight, and sizing.
+
+Scope should be read in three layers:
+
+- **Product direction**: the durable product Instrument is intended to become.
+- **First product slice / validation scope**: the end-to-end subset that must be built now to validate the product with real integrations, durable jobs, evidence, and human-approved writes.
+- **Later product scope**: valuable capabilities intentionally deferred so the first slice remains practical.
 
 ## 3. Goals
 
@@ -36,14 +44,14 @@ Iconography should follow the Phosphor visual language. The exported design prot
 - Keep humans in control of external writes.
 - Automatically post scoped, deduplicated, auditable GitHub PR observability review comments.
 - Provide a polished web console with durable progress, retry, and refresh behavior that does not depend on the user's browser session.
-- Demonstrate TrueFoundry-backed reliability behavior: retries, retry/error metrics, Datadog incident creation, and AI investigation of the induced failure.
+- Prove TrueFoundry-backed reliability behavior through a scoped validation path: retries, retry/error metrics, Datadog incident creation, and AI investigation of the induced failure.
 
 ## 4. Non-Goals
 
 - Instrument will not replace Datadog as the source of truth for monitor state, alert state, logs, metrics, or traces.
 - Instrument will not replace GitHub as the source of truth for code, commits, pull requests, branches, comments, or review state.
 - Instrument will not guarantee a single definitive root cause for every incident. It should present ranked hypotheses with evidence and confidence. A single hypothesis is acceptable when no credible alternatives exist.
-- The demo will not automatically merge code, generate incident fix PRs, or otherwise mutate customer systems without explicit human approval, except for automatic GitHub PR observability review comments.
+- The first product slice will not automatically merge code, generate incident fix PRs, or otherwise mutate customer systems without explicit human approval, except for automatic GitHub PR observability review comments.
 - Incident investigations are read-only even when they start automatically.
 
 ## 5. Users and Personas
@@ -62,14 +70,14 @@ The application engineer owns service code and pull requests. They receive autom
 
 ## 6. Supported Integrations
 
-Demo integrations are preconfigured for one workspace and one primary GitHub repository. Credentials may be provided through environment variables or local admin configuration. The demo does not need OAuth connection flows or self-serve integration setup.
+Initial integrations are preconfigured for one workspace and one primary GitHub repository. Credentials may be provided through environment variables or local admin configuration. The first product slice does not include OAuth connection flows or self-serve integration setup.
 
 ### 6.1 GitHub
 
 Instrument uses GitHub to:
 
 - Read repositories, files, branches, commits, pull requests, diffs, and PR metadata.
-- Detect recent deploy-related commits or changes relevant to an incident. GitHub commit history is the first deploy-correlation source for the demo.
+- Detect recent deploy-related commits or changes relevant to an incident. GitHub commit history is the first deploy-correlation source for the initial slice.
 - Automatically leave scoped observability review comments on pull requests.
 - Track PR review activity and posted observability comments.
 - Create branches and pull requests for approved observability improvement recommendations, then track whether those PRs are opened, merged, closed, or stale.
@@ -87,7 +95,7 @@ Instrument uses Datadog to:
 - Suggest improvements to existing monitors, such as threshold changes, missing tags, missing runbooks, noisy alerts, or missing notifications.
 - Create new Datadog alerts/monitors for accepted alert recommendations after explicit user approval.
 
-Datadog remains the source of truth for monitor and alert state. Instrument must avoid suggesting alerts for metrics that it cannot verify exist or can be emitted by the relevant code path. Datadog traces and dashboards may be used when available, but monitors, logs, and metrics are the required Datadog scopes for the demo.
+Datadog remains the source of truth for monitor and alert state. Instrument must avoid suggesting alerts for metrics that it cannot verify exist or can be emitted by the relevant code path. Datadog traces and dashboards may be used when available, but monitors, logs, and metrics are the required Datadog scopes for the first product slice.
 
 ### 6.3 TrueFoundry
 
@@ -96,7 +104,7 @@ Instrument uses TrueFoundry to:
 - Read MCP and LLM-related logs.
 - Correlate AI application failures, degraded model calls, tool failures, latency, and cost anomalies with incidents and recommendations.
 
-TrueFoundry is an observability signal source and the reliability substrate for the demo. Incident correlation should use available service names, trace IDs, request IDs, deployment timestamps, model names, tool names, and time windows from the incident.
+TrueFoundry is an observability signal source and the reliability substrate for Instrument's AI workflows. Incident correlation should use available service names, trace IDs, request IDs, deployment timestamps, model names, tool names, and time windows from the incident.
 
 ## 7. Core Workflows
 
@@ -104,7 +112,7 @@ TrueFoundry is an observability signal source and the reliability substrate for 
 
 When a configured GitHub pull request is opened or updated, Instrument analyzes the diff and relevant surrounding code. If the change introduces a specific observability gap, Instrument automatically posts concise review comments on the PR.
 
-The demo should handle pull request opened, reopened, synchronize, and ready-for-review events.
+The first product slice should handle pull request opened, reopened, synchronize, and ready-for-review events.
 
 Examples:
 
@@ -175,7 +183,7 @@ Requirements:
 
 ### 7.4 Datadog Alert Ingestion and Incident Investigation
 
-When Datadog sends an alert webhook, Instrument creates or updates an incident for the configured demo service. Whether the investigation starts automatically is governed by a workspace-level **investigation-start setting**. The default is `manual`, matching the current console prototype.
+When Datadog sends an alert webhook, Instrument creates or updates an incident for the configured service. Whether the investigation starts automatically is governed by a workspace-level **investigation-start setting**. The default is `manual`, matching the current console prototype.
 
 Investigation inputs include:
 
@@ -186,7 +194,7 @@ Investigation inputs include:
 
 Requirements:
 
-- **INC-1**: A Datadog alert webhook must create a new incident or update the current open incident for the configured demo service.
+- **INC-1**: A Datadog alert webhook must create a new incident or update the current open incident for the configured service.
 - **INC-2**: An incident must track alert state, incident state, service, title, description, source, start time, key signals, investigation state, timeline, and evidence.
 - **INC-3**: Investigation display states must include `new`, `investigating`, `complete`, and `failed`, mapped from durable job state as defined in Section 8.
 - **INC-4**: Investigation output must present ranked hypotheses when appropriate. If there is an obvious root cause, multiple hypotheses are not necessary.
@@ -198,26 +206,26 @@ Requirements:
 - **INC-10**: In `manual` mode, every investigation waits for a human to press Investigate.
 - **INC-11**: In `auto` mode, Instrument starts investigating every firing alert as it arrives.
 - **INC-12**: In `smart` mode, Instrument starts on its own for important, clear-cut alerts and waits for a human when the situation is ambiguous.
-- **INC-13**: The smart mode may use a deterministic demo rule, such as auto-investigating alerts whose name or tags contain a configured reliability-demo keyword.
+- **INC-13**: The smart mode may use a deterministic first-slice rule, such as auto-investigating alerts whose name or tags contain a configured reliability-demo keyword.
 - **INC-14**: Any investigation that began without a human must be visibly marked in both the incident list and incident detail, for example with a "Started automatically" badge.
-- **INC-15**: Investigations must be read-only and must never auto-generate or apply a fix. Fix generation stays future product scope under every investigation-start setting.
+- **INC-15**: Investigations must be read-only and must never auto-generate or apply a fix. Fix generation stays later product scope under every investigation-start setting.
 
-### 7.5 TrueFoundry Reliability Demo Workflow
+### 7.5 TrueFoundry Reliability Proof Workflow
 
-The demo must show Instrument as a reliable agent built on TrueFoundry features. The intended sequence is:
+The first product slice must show Instrument as a reliable agent built on TrueFoundry features. The intended sequence is:
 
 1. A user approves generation of a recommendation PR.
 2. The PR generation job encounters an artificial retryable TrueFoundry/API failure, such as a very low rate limit.
 3. Instrument retries with bounded backoff, preserves progress, and emits retry/error telemetry.
 4. A Datadog monitor triggers an incident from that telemetry.
-5. Smart investigation start automatically begins an investigation for the demo alert.
+5. Smart investigation start automatically begins an investigation for the reliability alert.
 6. The investigation cites Datadog and TrueFoundry evidence and identifies the induced rate limit as the root cause or leading hypothesis.
 7. After the rate limit is manually fixed, the incident can resolve while the original recommendation PR generation job succeeds in the background.
 
 Requirements:
 
 - **TF-1**: Retryable TrueFoundry/API failures during PR generation must not lose job state or duplicate external writes.
-- **TF-2**: The retry/error metric emitted for the forced failure must include enough tags or attributes for Datadog to route it to the demo service incident.
+- **TF-2**: The retry/error metric emitted for the forced failure must include enough tags or attributes for Datadog to route it to the configured service incident.
 - **TF-3**: The investigation must distinguish a platform/runtime configuration issue, such as a rate limit, from a code defect and suggest the manual operational fix.
 - **TF-4**: The console must show the PR generation job, incident investigation, incident resolution, and eventual generated PR as separate but linkable events.
 
@@ -244,7 +252,7 @@ Requirements:
 - **JOB-13**: In-console change notifications must be debounced to avoid noisy repeated prompts during alert storms or batch scans.
 - **JOB-14**: When a PR review recommendation becomes outdated because the reviewed PR was merged without applying the recommendation, the console must move it to the archive and notify the viewer without requiring a browser refresh.
 - **JOB-15**: When a new recommendation is generated from the updated codebase, the console must surface it in the active recommendations view without requiring a browser refresh.
-- **JOB-16**: The PRD does not require external notifications such as Slack, email, or PagerDuty for the demo.
+- **JOB-16**: The first product slice does not require external notifications such as Slack, email, or PagerDuty.
 
 ## 9. Evidence, Confidence, and AI Output
 
@@ -265,8 +273,8 @@ Requirements:
 Requirements:
 
 - **SEC-1**: Integration credentials must be stored securely and must not be logged in raw form.
-- **SEC-2**: Demo auth must support username/password login for a single configured workspace.
-- **SEC-3**: Integration credentials may be provided through environment variables or local admin configuration; the demo does not require OAuth connection flows.
+- **SEC-2**: First-slice auth must support username/password login for a single configured workspace.
+- **SEC-3**: Integration credentials may be provided through environment variables or local admin configuration; the first product slice does not require OAuth connection flows.
 - **SEC-4**: Human approval must be required before generating recommendation PRs, creating Datadog alerts, or taking other external write actions, except for automatic GitHub PR observability review comments.
 - **SEC-5**: Automatic GitHub PR observability review comments do not require per-comment human approval, but must be scoped, deduplicated, auditable, and limited to configured repositories/workspaces where the workflow is enabled.
 - **SEC-6**: Users must be able to see when an integration is disconnected, degraded, rate-limited, or missing required credentials.
@@ -288,25 +296,25 @@ Requirements:
 - **UI-4**: Destructive or externally mutating actions must require explicit confirmation, except for automatic GitHub PR observability review comments as defined in Sections 6.1 and 10.
 - **UI-5**: The incident list view must expose the investigation-start setting with the three labels shown in the design: Manual, Automatic, and Let Instrument decide.
 
-## 12. Demo Scope
+## 12. First Product Slice
 
-The demo must include:
+The first product slice must include:
 
 - Preconfigured GitHub, Datadog, and TrueFoundry integrations for one workspace and one primary repository.
-- Username/password login for the demo workspace.
+- Username/password login for the configured workspace.
 - Automatic GitHub PR observability review comments.
 - Active and archived recommendations, including multi-step recommendations, instrumentation recommendations, Datadog alert improvement recommendations, and PR review recommendations.
 - Human-approved GitHub PR generation for code-based instrumentation recommendations.
 - Human-approved Datadog alert generation for verified alert recommendations.
 - Automatic scans on commits to the primary branch with a cooldown.
-- Datadog alert ingestion for the configured demo service, incident investigation, evidence display, resolved incident history, and smart investigation start.
+- Datadog alert ingestion for the configured service, incident investigation, evidence display, resolved incident history, and smart investigation start.
 - Durable job state for long-running work, retries, live updates, refresh recovery, and backend restart recovery.
-- TrueFoundry reliability demonstration for forced retryable failures, retry/error metrics, Datadog incident creation, AI investigation, and background PR generation completion.
+- TrueFoundry reliability proof for forced retryable failures, retry/error metrics, Datadog incident creation, AI investigation, and background PR generation completion.
 - Console views for Incidents, Recommendations, and Integrations.
 
-## 13. Future Product Scope
+## 13. Later Product Scope
 
-The full product may later add:
+Later product iterations may add:
 
 - Self-serve OAuth connection flows and broader least-permission setup for GitHub, Datadog, and TrueFoundry.
 - Multi-workspace and multi-organization authorization, repository selection, and role-based access control.
@@ -317,18 +325,18 @@ The full product may later add:
 - Deeper Datadog traces, dashboards, service catalog, ownership, notification, and runbook workflows.
 - External notifications such as Slack, email, PagerDuty, or Datadog incident synchronization.
 
-## 14. Demo Non-Goals
+## 14. First-Slice Non-Goals
 
 - No OAuth setup flow or self-serve integration onboarding.
 - No multi-tenant organization model.
-- No incident grouping beyond updating the current open incident for the configured demo service.
+- No incident grouping beyond updating the current open incident for the configured service.
 - No automatic code merging, automatic production monitor changes, arbitrary existing-monitor edits, or incident-fix PR generation.
 - No external notifications outside the console and Datadog incident/monitor flow.
 - No guarantee of exhaustive recommendation coverage across every repository, service, metric, log, span, dashboard, or monitor type.
 
 ## 15. Acceptance Criteria
 
-### 15.1 Demo Path
+### 15.1 First-Slice Validation Path
 
 - Given Instrument is configured for the Instrument GitHub repository, when a PR introduces an observability gap, Instrument posts a concise review comment that cites the file and line.
 - Given the reviewed PR is merged without applying the recommendation, Instrument marks the related PR review recommendation `outdated`, moves it to the archive, explains why, and updates the console without a browser refresh.

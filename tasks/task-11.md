@@ -8,7 +8,7 @@ Not started.
 
 Incident investigations are read-only in every investigation-start mode. They must never auto-generate or apply fixes. The output must be structured, validated, evidence-backed, and careful about confidence.
 
-Depends on Tasks 5 and 10. Uses the TrueFoundry/GitHub/Datadog integration configuration from Tasks 2, 6, 9, and 12 where available.
+Depends on Tasks 5 and 10. Uses the shared TrueFoundry AI/MCP foundation from Task 5 and the GitHub/Datadog integration configuration from Tasks 2, 6, and 9. The reliability-demo-specific TrueFoundry observability MCP server is completed and hardened in Task 12; this task should degrade gracefully when that MCP server is not registered yet.
 
 ## Requirements
 
@@ -21,6 +21,7 @@ Depends on Tasks 5 and 10. Uses the TrueFoundry/GitHub/Datadog integration confi
 - Use TrueFoundry AI Gateway/Agent API for AI calls; do not call model providers directly from app code.
 - Attach only allowed MCP servers/tools with bounded iteration limits.
 - Persist `ai_model_calls`, `mcp_tool_invocations`, and `evidence_items` for all cited evidence.
+- If the Instrument-owned TrueFoundry observability MCP server is not yet registered, still complete Datadog/GitHub-backed investigations and surface the missing TrueFoundry source as a degraded integration or unavailable evidence, rather than blocking all investigations.
 - Validate structured investigation output before updating `incidents.hypotheses`.
 - Store ranked hypotheses with:
   - rank
@@ -46,6 +47,7 @@ Depends on Tasks 5 and 10. Uses the TrueFoundry/GitHub/Datadog integration confi
 - The system does not cite unavailable, stale, or unverified evidence as fact.
 - Runtime configuration/upstream causes produce a no-code-fix explanation and suggested next step.
 - Investigation jobs are read-only and do not create branches, PRs, monitors, or other external writes.
+- Missing TrueFoundry MCP configuration degrades the TrueFoundry evidence portion but does not prevent a Datadog/GitHub-backed investigation from completing.
 - Failed investigations preserve progress and expose retry when safe.
 
 ## Automated Tests

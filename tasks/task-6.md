@@ -25,11 +25,14 @@ Depends on Tasks 2, 3, and 5.
 - Enqueue a `github_pr_review_analysis` job idempotently per PR revision/action.
 - Analyze changed files plus relevant neighboring code before commenting.
 - Produce only specific, actionable observability findings tied to changed file and line.
+- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for model-assisted analysis. Do not call model providers directly.
 - Validate AI output against structured schemas before storing or posting.
+- Persist `ai_model_calls` for generated findings/comments and `mcp_tool_invocations` for any GitHub/MCP reads or writes executed through the Agent/MCP path.
 - Compute semantic and revision fingerprints as described in the ERD.
 - Create or update `pr_review_findings`, `pr_review_comments`, and category `pr_review` recommendations.
 - Post scoped GitHub review comments through the approved GitHub integration/MCP path.
 - Record every posted or skipped external write in `external_write_actions`; `approval_id` is allowed to be null only for `github_review_comment`.
+- Build the GitHub webhook handler so it can later update generated recommendation PR state from merged/closed PR events in Task 8, even if this task only completes PR review behavior.
 - Do not repost the same semantic finding on later PR revisions unless the file, code anchor, line placement, or suggested fix materially changes.
 
 ## Acceptance Criteria
@@ -48,6 +51,7 @@ Depends on Tasks 2, 3, and 5.
 - Add fixture tests for `opened`, `synchronize`, `ready_for_review`, and merged `closed` events.
 - Add dedupe tests for delivery replay, revision replay, and cross-revision semantic duplicate.
 - Add schema validation tests for PR finding/comment output.
+- Add provenance tests that PR findings/comments are linked to `ai_model_calls`, and MCP-backed provider calls are linked to `mcp_tool_invocations` where applicable.
 - Add external write audit tests for posted and skipped duplicate comments.
 
 ## Manual Verification

@@ -15,6 +15,7 @@ The design reference is under `design/project/`. The primary console prototype i
 - Create the production frontend scaffold using the stack named in the ERD: Vite, React, TypeScript, Tailwind CSS 3.4, `@insforge/sdk`, and Phosphor icons via `@phosphor-icons/react`.
 - Add basic routing for sign-in and the console views: Incidents, Recommendations, and Integrations.
 - Import or recreate the design assets from `design/project/assets/`, including the Instrument logo, color tokens, typography, and icon choices. The prototype's inline SVG icon layer is a portability detail of the exported design; the production app should use Phosphor React icons while matching the prototype's weight and sizing.
+- It is acceptable for the first production scaffold to import/adapt the prototype's CSS token files and component CSS directly while Tailwind is present in the stack. Do not spend this task mechanically rewriting every prototype rule into Tailwind utilities unless it makes the implementation simpler.
 - Implement a sign-in-only demo auth flow backed by InsForge auth. Do not expose admin keys in frontend env vars.
 - Build the console shell with sidebar navigation, connected-source list, profile area, and empty server-backed page containers.
 - Keep the incident-fix PR action from the prototype out of the demo UI, or leave it disabled with clear internal code comments, because PRD/ERD mark it future scope.

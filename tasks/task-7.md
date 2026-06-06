@@ -26,8 +26,10 @@ Depends on Tasks 3, 4, 5, and 6 for webhook foundation.
   - affected service/code/runtime path
   - proposed next step
   - ordered dependent steps when needed
-- Categories must include at least `instrumentation`, `alert`, and `pr_review`.
+- The overall recommendation system must support categories `instrumentation`, `alert`, and `pr_review`. Primary-branch scans usually create `instrumentation` and `alert` recommendations; `pr_review` recommendations are normally created by Task 6 and should be preserved/deduped correctly by lifecycle code.
+- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for model-assisted recommendation generation. Do not call model providers directly.
 - Validate recommendation output against structured schemas before display.
+- Persist `ai_model_calls` for generated recommendations and `mcp_tool_invocations` for any MCP-backed evidence collection.
 - Compute stable `dedupe_fingerprint` values and update existing recommendations instead of creating duplicates.
 - Preserve lifecycle history in `recommendation_events`.
 - Move stale findings to `outdated` with `outdated_reason` when code or monitor context invalidates them.
@@ -49,6 +51,7 @@ Depends on Tasks 3, 4, 5, and 6 for webhook foundation.
 - Add push webhook fixture tests for primary branch, non-primary branch, deleted branch, and forced push.
 - Add cooldown/coalescing tests.
 - Add recommendation dedupe tests across repeated scans.
+- Add provenance tests that generated recommendations reference their validating `ai_model_calls` and evidence items.
 - Add lifecycle transition tests for active, accepted, dismissed, and outdated.
 - Add step prerequisite/locking tests.
 

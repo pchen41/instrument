@@ -25,10 +25,12 @@ Depends on Tasks 3, 4, 5, and 7.
 - For existing monitor improvements, show a reviewable configuration diff, but do not mutate existing monitors from Instrument unless the PRD changes.
 - Add a confirmation flow for verified new-alert steps.
 - Create `approvals` and `generated_datadog_monitors` rows for approved new-alert recommendations.
+- Enqueue and run a durable `datadog_alert_generation` job for approved new-alert recommendations; do not create Datadog monitors directly from browser state.
 - Execute Datadog draft monitor creation through the approved Datadog integration/MCP path.
 - Record `external_write_actions` for Datadog writes.
 - Store resulting Datadog monitor ID/link and `external_state = 'draft'`.
 - Emit evidence items for monitor config, metric existence, alert history, and relevant code paths.
+- Use the shared TrueFoundry AI Gateway/Agent API foundation from Task 5 for model-assisted monitor analysis. Persist `ai_model_calls` and any MCP-backed `mcp_tool_invocations`.
 
 ## Acceptance Criteria
 
@@ -37,6 +39,7 @@ Depends on Tasks 3, 4, 5, and 7.
 - Existing monitor improvements render as reviewable diffs and are manually completable/reviewable only.
 - Creating a new Datadog monitor requires explicit approval.
 - Approved creation results in a draft Datadog monitor record with query, threshold, tags, service scope, known notification targets, and Datadog link or identifier.
+- Approved creation shows durable job progress and handles retry/failure through `jobs`, not browser-local state.
 - Recommendation step and lifecycle state update correctly after draft monitor creation.
 
 ## Automated Tests
@@ -44,6 +47,7 @@ Depends on Tasks 3, 4, 5, and 7.
 - Add metric verification tests for verified, expected-after-step, and unverified states.
 - Add tests that unapproved Datadog writes are rejected.
 - Add tests for generated monitor payload hashing and external write audit.
+- Add job tests for `datadog_alert_generation` progress, retry, and failure handling.
 - Add component tests for monitor diff drawer and draft monitor result state.
 
 ## Manual Verification

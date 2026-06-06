@@ -1,10 +1,10 @@
 # Instrument ERD
 
-This ERD is for AI-assisted implementation of the hackathon demo described in
-`docs/PRD.md`. It models Instrument as a Postgres-backed app on InsForge that
-persists durable workflow state, evidence, audit history, generated actions, and
-integration health while leaving GitHub, Datadog, and TrueFoundry as external
-systems of record.
+This ERD is for AI-assisted implementation of the first product slice described
+in `docs/PRD.md`. It models Instrument as a Postgres-backed app on InsForge
+that persists durable workflow state, evidence, audit history, generated
+actions, and integration health while leaving GitHub, Datadog, and TrueFoundry
+as external systems of record.
 
 ## Sources Read
 
@@ -66,8 +66,9 @@ systems of record.
   `create_datadog_monitor`.
 - Important Datadog MCP caveat: `create_datadog_monitor` creates a draft monitor
   that does not send notifications. The ERD supports draft and published states.
-  For the demo, accepted Datadog alert recommendations create draft monitors
-  only; publishing actively notifying monitors is future scope.
+  For the first product slice, accepted Datadog alert recommendations create
+  draft monitors only; publishing actively notifying monitors is later product
+  scope.
 - Datadog remains the source of truth for monitor state, alert state, logs,
   metrics, traces, service ownership, criticality, and notification routing.
 - GitHub remains the source of truth for repository, commit, branch, PR, review,
@@ -78,9 +79,9 @@ systems of record.
 
 ## Modeling Principles
 
-- Every user-owned table has `workspace_id` even though the demo has one
-  workspace. This keeps RLS simple without requiring parent-join policies during
-  the hackathon build.
+- Every user-owned table has `workspace_id` even though the first product slice
+  has one workspace. This keeps RLS simple without requiring parent-join
+  policies during the first-slice build.
 - Store external IDs and cached snapshots, not authoritative copies of external
   systems.
 - Store every AI conclusion with evidence references and schema validation
@@ -89,19 +90,20 @@ systems of record.
   review comments do not require human approval, but they still require audit and
   idempotency.
 - Keep the custom TrueFoundry observability MCP server and Agent API MCP tool
-  loop as first-class demo architecture. They are part of the hackathon story,
-  not future scope.
-- Use durable `jobs` for all long-running work. Store the demo's named phases
-  and retry-attempt summaries in bounded `jsonb` arrays on `jobs` instead of
-  separate `job_phases` and `job_attempts` tables.
+  loop as first-class first-slice architecture. They are part of the product
+  validation story, not later product scope.
+- Use durable `jobs` for all long-running work. Store the first product slice's
+  named phases and retry-attempt summaries in bounded `jsonb` arrays on `jobs`
+  instead of separate `job_phases` and `job_attempts` tables.
 - Use `jsonb` for provider-specific payloads, redacted request/response
   summaries, UI-ready child collections, and configuration diffs where external
-  schemas are too unstable or too time-expensive to normalize for the demo.
+  schemas are too unstable or too time-expensive to normalize for the first
+  product slice.
 - Normalize only the records that need independent idempotency, audit, approval,
-  or cross-workflow lookup. For the demo, this keeps MCP/tool calls, model calls,
-  evidence, external writes, jobs, webhooks, recommendations, incidents, and
-  generated GitHub/Datadog artifacts first-class while collapsing display-only
-  child rows into their parent records.
+  or cross-workflow lookup. For the first product slice, this keeps MCP/tool
+  calls, model calls, evidence, external writes, jobs, webhooks,
+  recommendations, incidents, and generated GitHub/Datadog artifacts first-class
+  while collapsing display-only child rows into their parent records.
 
 ## Implementation Architecture
 
@@ -205,7 +207,7 @@ erDiagram
 
 Create Postgres enums only for values stored in typed columns. Values used only
 inside bounded `jsonb` arrays are listed as JSON vocabularies below; they do not
-need first-pass database enum migrations for the demo.
+need first-pass database enum migrations for the first product slice.
 
 - `integration_provider`: `github`, `datadog`, `truefoundry`
 - `integration_status`: `connected`, `disconnected`, `degraded`,
@@ -255,12 +257,12 @@ JSON vocabularies:
 
 ### `workspaces`
 
-Single-row in the demo, but all app tables should still reference it.
+Single-row in the first product slice, but all app tables should still reference it.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | `uuid pk` | |
-| `slug` | `text unique not null` | Stable demo workspace slug. |
+| `slug` | `text unique not null` | Stable configured workspace slug. |
 | `name` | `text not null` | Console display name. |
 | `primary_repository_id` | `uuid fk repositories.id null` | Filled after repository seed/link. |
 | `created_at`, `updated_at` | `timestamptz` | |
@@ -284,8 +286,8 @@ Primary key: `(workspace_id, user_id)`.
 | --- | --- | --- |
 | `workspace_id` | `uuid pk fk workspaces.id` | |
 | `investigation_start_mode` | `investigation_start_mode not null default 'manual'` | UI labels: Manual, Automatic, Let Instrument decide. |
-| `smart_start_rules` | `jsonb not null default '{}'` | Optional deterministic keyword/tag rule if smart auto-start needs stricter demo behavior later. |
-| `primary_branch_scan_cooldown_seconds` | `integer not null default 30` | Short demo cooldown for coalescing primary-branch proactive scans. |
+| `smart_start_rules` | `jsonb not null default '{}'` | Optional deterministic keyword/tag rule if smart auto-start needs stricter first-slice behavior later. |
+| `primary_branch_scan_cooldown_seconds` | `integer not null default 30` | Short first-slice cooldown for coalescing primary-branch proactive scans. |
 | `pr_review_enabled` | `boolean not null default true` | Enables automatic scoped PR comments. |
 | `updated_by` | `uuid fk auth.users.id null` | |
 | `updated_at` | `timestamptz not null` | |
@@ -300,7 +302,7 @@ Represents configured GitHub, Datadog, and TrueFoundry integration state.
 | --- | --- | --- |
 | `id` | `uuid pk` | |
 | `workspace_id` | `uuid fk workspaces.id` | |
-| `provider` | `integration_provider not null` | One each for demo. |
+| `provider` | `integration_provider not null` | One each for the first product slice. |
 | `status` | `integration_status not null` | Drives Integrations view. |
 | `display_name` | `text not null` | `GitHub`, `Datadog`, `TrueFoundry`. |
 | `external_account_id` | `text null` | GitHub org/user, Datadog org/site, TrueFoundry tenant/account. |
@@ -313,9 +315,10 @@ Represents configured GitHub, Datadog, and TrueFoundry integration state.
 
 Unique: `(workspace_id, provider)`.
 
-For the demo, `integrations` stores current connection health directly. If
-historical health becomes important later, add an `integration_status_events`
-history table; do not build it for the first hackathon path.
+For the first product slice, `integrations` stores current connection health
+directly. If historical health becomes important later, add an
+`integration_status_events` history table; do not build it for the first-slice
+path.
 
 ### `mcp_servers`
 
@@ -323,9 +326,10 @@ Configured MCP servers as seen through TrueFoundry MCP Gateway.
 Instrument's tool-using LLM workflows call the TrueFoundry Agent API. For
 registered MCP servers, pass `integration_fqn` entries in the Agent API
 `mcp_servers` array with `enable_all_tools = false` and an explicit tool
-allowlist. Register three MCP servers for the demo: GitHub MCP, Datadog MCP,
-and the Instrument-owned TrueFoundry observability MCP server. Keep the copied
-MCP server URL for diagnostics and any deterministic direct MCP client calls.
+allowlist. Register three MCP servers for the first product slice: GitHub MCP,
+Datadog MCP, and the Instrument-owned TrueFoundry observability MCP server. Keep
+the copied MCP server URL for diagnostics and any deterministic direct MCP
+client calls.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -373,11 +377,11 @@ events, then persists `mcp_tool_invocations` and any cited TrueFoundry metric,
 log, or span snapshots as `evidence_items`. Pass job and agent-context
 identifiers to the custom MCP server as explicit tool arguments. Headers such as
 `mcp_servers[].headers` or `x-tfy-mcp-headers` may be used for authentication or
-future confirmed pass-through behavior, but the demo should not depend on them
+future confirmed pass-through behavior, but the first product slice should not depend on them
 for metadata propagation. If context is unavailable, correlate with
 TrueFoundry trace/request IDs and the enclosing `ai_model_calls` row.
 
-Starter query templates for the demo:
+Starter query templates for the first product slice:
 
 - `last_15m_by_job`: model/MCP errors, retries, latency, and request counts
   filtered by Instrument job/workflow metadata.
@@ -505,9 +509,9 @@ Unique: `(repository_id, external_pr_number)`.
 
 Commit metadata used for deploy correlation is stored as `evidence_items`
 (`source_type = 'commit'`) or inside `incidents.correlated_changes` for the
-demo. GitHub remains the source of truth for full commit history, so do not
-build a first-pass `github_commits` cache unless later workflows need commit
-rows as independently addressable records.
+first product slice. GitHub remains the source of truth for full commit history,
+so do not build a first-pass `github_commits` cache unless later workflows need
+commit rows as independently addressable records.
 
 ### `github_push_events`
 
@@ -721,7 +725,7 @@ Investigation display mapping:
 - `cancelled`: `failed` with cancellation copy, unless the target workflow has
   a more specific cancelled UI state.
 
-`jobs.phases` replaces the earlier `job_phases` table for the demo. Example
+`jobs.phases` replaces the earlier `job_phases` table for the first product slice. Example
 phase object:
 
 ```json
@@ -798,7 +802,7 @@ Proactive, alert, and PR-review recommendations.
 | `affected_code_path` | `text null` | |
 | `affected_runtime_path` | `text null` | Endpoint, queue, job, dashboard panel, etc. |
 | `proposed_next_step` | `text not null` | |
-| `steps` | `jsonb not null default '[]'` | Ordered dependent step objects for the demo UI and workflow state. |
+| `steps` | `jsonb not null default '[]'` | Ordered dependent step objects for the first product slice UI and workflow state. |
 | `steps_schema_version` | `text not null default 'recommendation_steps.v1'` | Version for validating `steps` JSON. |
 | `confidence` | `confidence_level null` | Optional for recs. |
 | `dedupe_fingerprint` | `text not null` | Stable across scans for REC-7. |
@@ -815,7 +819,7 @@ Unique active dedupe: `(workspace_id, category, dedupe_fingerprint)` with app lo
 to update `last_seen_scan_id` instead of creating duplicates.
 
 `recommendations.steps` replaces the earlier `recommendation_steps` table for
-the demo. Each step object should include:
+the first product slice. Each step object should include:
 
 - `key`: stable per-recommendation key, such as `add_queue_depth_metric`.
 - `order`: 1-based display order.
@@ -832,7 +836,7 @@ the demo. Each step object should include:
 Acceptance rule: a recommendation becomes `accepted` only after all required
 step objects are `done`; opening a PR is not enough unless the step is
 explicitly a non-mutating/manual record. `datadog_monitor_change` is a
-reviewable diff for the demo and should complete via `external_monitor_change`
+reviewable diff for the first product slice and should complete via `external_monitor_change`
 or `manual_mark` unless the product scope is later expanded to let Instrument
 mutate existing monitors.
 
@@ -941,7 +945,7 @@ Unique: `(workspace_id, external_monitor_id)`.
 
 Metric existence and prerequisite tracking lives on
 `recommendations.steps[].verification_state` plus linked `evidence_items` for
-the demo. Add a normalized `observed_metrics` table later only if metric
+the first product slice. Add a normalized `observed_metrics` table later only if metric
 inventory becomes a reusable product surface.
 
 ### `datadog_alert_events`
@@ -998,7 +1002,7 @@ Created/updated from authenticated Datadog alert webhooks.
 | `datadog_monitor_id` | `uuid fk datadog_monitors.id null` | |
 | `webhook_event_id` | `uuid fk inbound_webhooks.id null` | Creation/update source. |
 | `datadog_alert_event_id` | `uuid fk datadog_alert_events.id null` | Normalized source alert event. |
-| `caused_by_job_id` | `uuid fk jobs.id null` | Used for TF-4 demo link from induced incident to original PR-generation job. |
+| `caused_by_job_id` | `uuid fk jobs.id null` | Used for TF-4 reliability-proof link from induced incident to original PR-generation job. |
 | `external_alert_key` | `text not null` | Datadog dedupe/alert key. |
 | `incident_correlation_key` | `text not null` | Non-null key for "update current open incident" semantics. |
 | `title` | `text not null` | |
@@ -1023,16 +1027,17 @@ Do not rely on nullable `service_id` for uniqueness.
 
 `incidents.signals`, `incidents.timeline`, `incidents.hypotheses`, and
 `incidents.correlated_changes` replace the earlier incident child tables for the
-demo. Keep each object compact, UI-safe, and evidence-backed via embedded
-`evidence_id` or `evidence_ids` fields. `hypotheses` must still validate against
-the incident output schema and include rank, title, reasoning, confidence,
+first product slice. Keep each object compact, UI-safe, and evidence-backed via
+embedded `evidence_id` or `evidence_ids` fields. `hypotheses` must still
+validate against the incident output schema and include rank, title, reasoning,
+confidence,
 `root_cause_type`, `fixable_by_instrument`, `no_fix_reason` when needed, and
 `suggested_next_step`.
 
 ### `telemetry_emissions`
 
 Metrics/events Instrument emits about its own reliability, especially retry and
-error telemetry used by the TrueFoundry/Datadog demo.
+error telemetry used by the TrueFoundry/Datadog reliability proof.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -1085,7 +1090,7 @@ Index: `(workspace_id, source_type, external_id)`.
 Index: `(workspace_id, subject_type, subject_id)`.
 
 `evidence_items` intentionally replaces the earlier `evidence_links`,
-`truefoundry_metric_queries`, and `truefoundry_spans` tables for the demo. If
+`truefoundry_metric_queries`, and `truefoundry_spans` tables for the first product slice. If
 one external fact supports multiple subjects, duplicate a compact evidence item
 or write a second item with the same `content_hash`; avoid building a many-to-
 many evidence join until the product needs it. Store TrueFoundry metric query
@@ -1162,7 +1167,7 @@ main audit table for SEC-4/SEC-5.
 | `job_id` | `uuid fk jobs.id null` | |
 | `mcp_tool_invocation_id` | `uuid fk mcp_tool_invocations.id null` | If executed through MCP. |
 | `provider` | `integration_provider not null` | |
-| `action_kind` | `text not null` | `github_review_comment`, `github_create_branch`, `github_update_file`, `github_create_pr`, `datadog_create_monitor`. `datadog_publish_monitor` is future scope. |
+| `action_kind` | `text not null` | `github_review_comment`, `github_create_branch`, `github_update_file`, `github_create_pr`, `datadog_create_monitor`. `datadog_publish_monitor` is later product scope. |
 | `idempotency_key` | `text not null` | Required. |
 | `target_summary` | `text not null` | UI-safe target. |
 | `request_hash` | `text not null` | Must match `approvals.approved_payload_hash` for approval-gated actions. |
@@ -1180,7 +1185,7 @@ Demo enforcement requirement: the external action executor must reject every
 an `approved` and unrevoked approval, and `request_hash` equals
 `approvals.approved_payload_hash`. This prevents an approved preview from
 drifting before execution. A database trigger can enforce the same invariant
-later, but for the demo keep the rule in worker code to reduce migration and
+later, but for the first product slice keep the rule in worker code to reduce migration and
 trigger-debugging risk.
 
 ### `app_events`
@@ -1227,7 +1232,7 @@ Index: `(workspace_id, topic, visible_after desc)`.
 - Evidence and confidence: `evidence_items`, `ai_model_calls`, and
   `incidents.hypotheses`.
 - Integration health: `integrations` and `mcp_servers`.
-- TrueFoundry reliability demo: `jobs` in `retrying`, `jobs.attempts`,
+- TrueFoundry reliability proof: `jobs` in `retrying`, `jobs.attempts`,
   `telemetry_emissions`, `ai_model_calls`, `mcp_tool_invocations`,
   `incidents.signals`, and `evidence_items`.
 - Live console updates and debouncing: `app_events` plus `jobs.progress_version`.
@@ -1240,7 +1245,7 @@ Index: `(workspace_id, topic, visible_after desc)`.
 - Prefer carrying `workspace_id` directly on user-readable child tables,
   including PR review comments, generated artifacts, evidence, and app events.
   Display-only child collections live inside parent `jsonb` columns for the
-  demo and inherit the parent's RLS.
+  first product slice and inherit the parent's RLS.
 - Background workers, webhook handlers, and scheduled jobs should run with an
   InsForge server/service role and must still write `workspace_id`.
 - Never put provider tokens, API keys, Datadog application keys, webhook secrets,
@@ -1249,9 +1254,9 @@ Index: `(workspace_id, topic, visible_after desc)`.
 - `inbound_webhooks.signature_valid` must be true before downstream incident/job
   creation.
 - `external_write_actions.approval_id` must be non-null for mutating actions
-  except `github_review_comment`. For the demo, enforce approval state and
-  request-hash equality in the external action executor; add a database trigger
-  later only if this flow needs stronger defense-in-depth.
+  except `github_review_comment`. For the first product slice, enforce approval
+  state and request-hash equality in the external action executor; add a
+  database trigger later only if this flow needs stronger defense-in-depth.
 - Automatic PR comments must be scoped by `repositories.pr_review_enabled`,
   workspace settings, and repository allowlist config.
 - Webhook processing should only create incidents/jobs after signature or shared
@@ -1287,7 +1292,7 @@ Index: `(workspace_id, topic, visible_after desc)`.
 The ERD assumes these are supplied outside the database:
 
 - InsForge project is linked and configured for `instrument`.
-- InsForge auth has one demo user and one workspace membership.
+- InsForge auth has one configured user and one workspace membership.
 - InsForge server-side env/secrets include any required app/admin keys. Do not
   expose admin keys to the frontend.
 - TrueFoundry account/tenant, control plane URL, gateway base URL, and an
@@ -1308,12 +1313,12 @@ The ERD assumes these are supplied outside the database:
 - Datadog site, webhook shared-secret/custom-header configuration, and Datadog MCP auth.
   Datadog MCP needs `mcp_read` for reads and `mcp_write` plus resource-level
   permissions for draft monitor creation. Publishing notifying monitors is not
-  in demo scope.
+  in first-slice scope.
 - The Datadog webhook template must include fields sufficient to synthesize
   `external_delivery_id`, `alert_transition_key`, and `alert_correlation_key`.
 - Demo Datadog monitor(s) that trigger on Instrument/TrueFoundry retry/error
   telemetry, unless monitor publishing is implemented after human approval.
-- Telemetry tags/attributes for the reliability demo, including service,
+- Telemetry tags/attributes for the reliability proof, including service,
   environment, stable workflow name, integration source, error/rate-limit code,
   and trace/request IDs. Avoid raw job IDs as Datadog metric tags; use
   application-side correlation to set `incidents.caused_by_job_id`.
@@ -1417,23 +1422,25 @@ Mapping rules:
   `evidence_items` and external URLs over large raw blobs.
 - Treat Datadog ownership, criticality, and notification routing as optional
   facts. Null is correct when Datadog does not provide the metadata.
-- Treat incident fix PR generation shown in the prototype as future scope. This
-  ERD supports recommendation PR generation only for the demo; remove, hide, or
-  disable incident "Generate fix" actions in the demo UI.
+- Treat incident fix PR generation shown in the prototype as later product
+  scope. This ERD supports recommendation PR generation only for the first
+  product slice; remove, hide, or disable incident "Generate fix" actions in the
+  first product slice UI.
 - Treat existing Datadog monitor edits as reviewable/manual recommendations for
-  the demo. Creating new monitors is in scope; mutating existing monitors from
-  Instrument is future scope unless the PRD changes.
+  the first product slice. Creating new monitors is in scope; mutating existing
+  monitors from Instrument is later product scope unless the PRD changes.
 - Accepted Datadog alert recommendations create draft monitors only for the
-  demo. Store `generated_datadog_monitors.external_state = 'draft'` and surface
-  the Datadog monitor ID/link returned by MCP.
+  first product slice. Store
+  `generated_datadog_monitors.external_state = 'draft'` and surface the Datadog
+  monitor ID/link returned by MCP.
 - Use simple polling against `app_events`, jobs, and relevant detail endpoints
-  for the demo, initially around once per second while a user is viewing active
+  for the first product slice, initially around once per second while a user is viewing active
   work. InsForge realtime can be added later if polling becomes noisy.
 - For generated PR audit, patch hashes/excerpts plus GitHub links are sufficient;
   GitHub remains the source of truth for full diffs and commits.
-- For the reliability demo, smart investigation start can initially rely on the
+- For the reliability proof, smart investigation start can initially rely on the
   alert copy and configured monitor semantics rather than a deterministic
-  keyword/tag rule. If the demo needs stricter behavior later, add a simple
+  keyword/tag rule. If the first product slice needs stricter behavior later, add a simple
   Datadog tag or keyword rule into `workspace_settings.smart_start_rules`.
 - TrueFoundry model metrics, MCP metrics, and request logs are exposed to the
   Agent API through the Instrument observability MCP server. The MCP tools call

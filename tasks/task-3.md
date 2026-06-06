@@ -14,6 +14,10 @@ This task extends the Task 2 foundation with the domain tables required by PR re
   - `services`
   - `repositories`
   - `repository_service_paths`
+- Add deferred foreign keys from Task 2 now that their target tables exist:
+  - `workspaces.primary_repository_id -> repositories.id`, if the column was created in Task 2.
+  - `telemetry_emissions.datadog_monitor_id -> datadog_monitors.id`.
+  - `telemetry_emissions.incident_id -> incidents.id`.
 - Add inbound webhook and GitHub workflow tables:
   - `inbound_webhooks`
   - `github_pull_requests`
@@ -38,6 +42,7 @@ This task extends the Task 2 foundation with the domain tables required by PR re
   - `alert_state`
   - `incident_state`
 - Add the indexes and uniqueness constraints called out in the ERD for these tables.
+- Add the partial unique index for `mcp_tool_invocations(mcp_server_id, tool_name, idempotency_key)` where `idempotency_key is not null` if it was not added in Task 2.
 - Enable RLS on every workspace-owned table and include direct `workspace_id` where the ERD duplicates it for simpler policies.
 - Seed demo rows sufficient for the console to render:
   - Active and resolved incidents.
@@ -49,6 +54,7 @@ This task extends the Task 2 foundation with the domain tables required by PR re
 ## Acceptance Criteria
 
 - Tables support the PRD lifecycle states for recommendations and incidents.
+- Task 2 and Task 3 migrations together satisfy the ERD's foreign key shape without forward-reference migration failures.
 - `recommendations.steps` stores ordered step objects with stable keys, lock/prerequisite state, and job/completion fields.
 - `incidents.hypotheses`, `incidents.timeline`, `incidents.signals`, and `incidents.correlated_changes` store compact UI-safe JSON with evidence IDs where available.
 - Datadog ownership, criticality, and notification routing can remain null without blocking recommendations.
