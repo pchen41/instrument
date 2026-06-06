@@ -3,6 +3,8 @@ Tasks are in tasks folder. Each task is it's own separate document (e.g. task-1.
 Design reference is in design folder (read README.md in that folder).
 All of the above documents are meant to be read by AI to provide context, so any modifications should be appropriate for that purpose.
 
+There is also an CONFIG.md in the docs folder which contains configuration details for various services (e.g. keys). Do not commit this file.
+
 How to headlessly invoke other agents:
 
 claude:
