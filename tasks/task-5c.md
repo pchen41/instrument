@@ -98,3 +98,11 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
 - Update this section with helper locations, schema versions, Render service
   name/URL, MCP registration notes, Instrument observability MCP server
   location, and any provider caveats. Record secret names only, never values.
+- 2026-06-06: Added the demo Instrument observability MCP server under
+  `services/truefoundry-mcp/`. It is a Render-targeted Python/FastMCP service
+  with `/healthz`, `/mcp`, shared bearer/header auth, bounded TrueFoundry
+  model/MCP metrics tools, request-log/span tools, and a stub evidence-bundle
+  tool. Root `render.yaml` defines the Render web service and secret env var
+  names only. Local helper tests pass with `python3 -m unittest discover -s
+  tests` from the service directory. Live Render deploy and TrueFoundry MCP
+  Gateway registration are still pending.

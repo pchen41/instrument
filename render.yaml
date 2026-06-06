@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: instrument-truefoundry-mcp
+    runtime: python
+    rootDir: services/truefoundry-mcp
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: TFY_BASE_URL
+        sync: false
+      - key: TFY_API_TOKEN
+        sync: false
+      - key: TFY_DATA_ROUTING_DESTINATION
+        sync: false
+      - key: MCP_AUTH_TOKEN
+        sync: false
+      - key: MAX_TIME_WINDOW_HOURS
+        value: "6"
+      - key: MAX_RESULT_LIMIT
+        value: "50"
