@@ -7,9 +7,11 @@
 // so a retried PR-review job is processed the same way on either path.
 import { makeInvestigationExecutor, type PhaseExecutor } from '../../lib/agent.ts';
 import { makePrReviewExecutor } from '../../lib/agent-pr.ts';
+import { makeScanExecutor } from '../../lib/agent-scan.ts';
 import { createGateway, createScriptedToolHost, createWorkStore } from './agent-runtime.ts';
 import { createAgentInvoker, createModelCallStore } from './model-call-store.ts';
 import { createPrMcp, createPrReviewStore } from './pr-review-store.ts';
+import { createScanMcp, createScanStore } from './scan-store.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Admin = any;
@@ -26,5 +28,15 @@ export function buildExecutePhase(admin: Admin): PhaseExecutor {
     mcp: createPrMcp(admin),
     store: createPrReviewStore(admin),
   });
-  return (ctx) => (ctx.job.job_type === 'github_pr_review_analysis' ? prReview(ctx) : investigation(ctx));
+  const scan = makeScanExecutor({
+    gateway: createAgentInvoker(),
+    modelStore: createModelCallStore(admin),
+    mcp: createScanMcp(admin),
+    store: createScanStore(admin),
+  });
+  return (ctx) => {
+    if (ctx.job.job_type === 'github_pr_review_analysis') return prReview(ctx);
+    if (ctx.job.job_type === 'proactive_scan') return scan(ctx);
+    return investigation(ctx);
+  };
 }
