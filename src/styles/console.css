@@ -157,6 +157,12 @@ button{font-family:inherit;cursor:pointer;}
 /* Small brand dot used by the recommendation "Generating" pill. */
 .gen-dot{width:8px;height:8px;border-radius:50%;background:var(--brand-600);flex-shrink:0;}
 
+/* In-button spinner shown while a console action is in flight (adopts the
+   button's text colour via currentColor, so it reads on any button variant). */
+@keyframes btn-spin{to{transform:rotate(360deg);}}
+.btn-spin{display:inline-block;width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:btn-spin .6s linear infinite;vertical-align:-2px;}
+@media (prefers-reduced-motion:reduce){.btn-spin{animation:none;}}
+
 .section-label{font:var(--caption);text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);margin-bottom:12px;}
 
 /* hypotheses */

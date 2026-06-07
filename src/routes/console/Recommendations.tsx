@@ -143,10 +143,11 @@ function OpenCard({
   rec: RecommendationCard;
   onOpen: (d: DrawerState) => void;
   onFire: (a: DeferredAction) => void;
-  onDismiss: () => void;
+  onDismiss: () => Promise<void>;
 }) {
   const kind = KIND[rec.category];
   const steps = [...(rec.steps ?? [])].sort((a, b) => a.order - b.order);
+  const [dismissing, setDismissing] = useState(false);
   return (
     <div className="card rec">
       <div className="rec-ic">
@@ -174,8 +175,27 @@ function OpenCard({
           ))}
         </ol>
         <div className="rec-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onDismiss}>
-            Dismiss
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={dismissing}
+            onClick={async () => {
+              setDismissing(true);
+              try {
+                await onDismiss();
+              } finally {
+                setDismissing(false);
+              }
+            }}
+          >
+            {dismissing ? (
+              <>
+                <span className="btn-spin" />
+                Dismissing…
+              </>
+            ) : (
+              'Dismiss'
+            )}
           </button>
         </div>
       </div>
@@ -183,9 +203,10 @@ function OpenCard({
   );
 }
 
-function ArchivedCard({ rec, onRestore }: { rec: RecommendationCard; onRestore: () => void }) {
+function ArchivedCard({ rec, onRestore }: { rec: RecommendationCard; onRestore: () => Promise<void> }) {
   const kind = KIND[rec.category];
   const badge = ARCH_BADGE[rec.state];
+  const [restoring, setRestoring] = useState(false);
   return (
     <div className={'card rec rec-closed ' + rec.state}>
       <div className="rec-ic">
@@ -205,10 +226,27 @@ function ArchivedCard({ rec, onRestore }: { rec: RecommendationCard; onRestore: 
               type="button"
               className="btn btn-ghost btn-sm arch-restore"
               style={{ marginLeft: 'auto' }}
-              onClick={onRestore}
+              disabled={restoring}
+              onClick={async () => {
+                setRestoring(true);
+                try {
+                  await onRestore();
+                } finally {
+                  setRestoring(false);
+                }
+              }}
             >
-              <Icon name="undo" />
-              Restore
+              {restoring ? (
+                <>
+                  <span className="btn-spin" />
+                  Restoring…
+                </>
+              ) : (
+                <>
+                  <Icon name="undo" />
+                  Restore
+                </>
+              )}
             </button>
           )}
         </div>

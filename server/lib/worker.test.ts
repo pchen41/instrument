@@ -110,6 +110,26 @@ describe('runTick', () => {
     expect(after?.attempts).toHaveLength(1); // processed exactly once
   });
 
+  it('promotes a completed investigation\'s tentative leading hypothesis to confirmed', async () => {
+    const clock = fixedClock();
+    const db = new FakeDb();
+    const incident = db.seedIncident({
+      hypotheses: [
+        { rank: 1, leading: true, summary: 'Worker tick not draining fast enough', detail: 'Tentative — Instrument will confirm once you start the investigation.', confidence: 'low' },
+      ],
+      timeline: [{ at: '2026-06-06T14:43:10Z', kind: 'alert', title: 'Monitor fired' }],
+    });
+    const job = dueJob(db, clock, { job_type: 'incident_investigation', target_type: 'incident', target_id: incident.id });
+
+    await runTick(db, opts(clock));
+
+    expect((await db.getJob(job.id))?.state).toBe('succeeded');
+    const after = await db.getIncident(incident.id);
+    expect(after?.hypotheses?.[0].confidence).toBe('likely'); // promoted from low
+    expect(after?.hypotheses?.[0].detail).not.toMatch(/tentative|once you start/i);
+    expect(after?.timeline?.some((t) => t.title === 'Investigation complete')).toBe(true);
+  });
+
   it('bails ("lost") without clobbering a job whose lease was reclaimed mid-run', async () => {
     const clock = fixedClock();
     const db = new FakeDb();

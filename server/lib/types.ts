@@ -99,6 +99,23 @@ export interface JobRow {
   completed_at?: string | null;
 }
 
+export interface IncidentHypothesis {
+  rank?: number;
+  summary?: string;
+  detail?: string;
+  leading?: boolean;
+  confidence?: 'high' | 'likely' | 'low' | null;
+  root_cause_type?: string;
+  [key: string]: unknown;
+}
+
+export interface IncidentTimelineEntry {
+  at: string;
+  kind: string;
+  title: string;
+  detail?: string | null;
+}
+
 export interface IncidentRow {
   id: string;
   workspace_id: string;
@@ -106,6 +123,8 @@ export interface IncidentRow {
   service_name?: string | null;
   investigation_job_id?: string | null;
   investigation_start_mode_snapshot?: string | null;
+  hypotheses?: IncidentHypothesis[];
+  timeline?: IncidentTimelineEntry[];
 }
 
 export type RecommendationState = 'active' | 'accepted' | 'dismissed' | 'outdated';

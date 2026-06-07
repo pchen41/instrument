@@ -63,6 +63,8 @@ export class FakeDb implements JobsDb {
       service_name: i.service_name ?? null,
       investigation_job_id: i.investigation_job_id ?? null,
       investigation_start_mode_snapshot: i.investigation_start_mode_snapshot ?? null,
+      hypotheses: i.hypotheses ?? [],
+      timeline: i.timeline ?? [],
     };
     this.incidents.set(row.id, row);
     return row;

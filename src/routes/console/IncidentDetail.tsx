@@ -269,10 +269,20 @@ function FailedInvestigation({
 }: {
   incident: IncidentDetailData['incident'];
   job: NonNullable<IncidentDetailData['job']>;
-  onRetry: () => void;
+  onRetry: () => Promise<void>;
 }) {
   const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
   const phases = job.phases ?? [];
+  const run = async () => {
+    setConfirm(false);
+    setBusy(true);
+    try {
+      await onRetry();
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div className="job-failed">
       <div className="jf-head">
@@ -319,9 +329,18 @@ function FailedInvestigation({
 
       <div className="jf-actions">
         {job.safe_to_retry ? (
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setConfirm(true)}>
-            <Icon name="undo" />
-            Retry investigation
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setConfirm(true)} disabled={busy}>
+            {busy ? (
+              <>
+                <span className="btn-spin" />
+                Retrying…
+              </>
+            ) : (
+              <>
+                <Icon name="undo" />
+                Retry investigation
+              </>
+            )}
           </button>
         ) : (
           <span className="jf-noretry">
@@ -337,10 +356,7 @@ function FailedInvestigation({
           title="Retry this investigation?"
           confirmLabel="Retry"
           confirmIcon="undo"
-          onConfirm={() => {
-            setConfirm(false);
-            onRetry();
-          }}
+          onConfirm={run}
           onCancel={() => setConfirm(false)}
           body={
             <span>
@@ -354,8 +370,18 @@ function FailedInvestigation({
   );
 }
 
-function NotStarted({ serviceName, onStart }: { serviceName: string | null; onStart: () => void }) {
+function NotStarted({ serviceName, onStart }: { serviceName: string | null; onStart: () => Promise<void> }) {
   const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setConfirm(false);
+    setBusy(true);
+    try {
+      await onStart();
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div style={{ marginTop: '16px' }}>
       <div className="callout">
@@ -370,9 +396,18 @@ function NotStarted({ serviceName, onStart }: { serviceName: string | null; onSt
         </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '14px' }}>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setConfirm(true)}>
-          <Icon name="search" />
-          Investigate
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => setConfirm(true)} disabled={busy}>
+          {busy ? (
+            <>
+              <span className="btn-spin" />
+              Starting…
+            </>
+          ) : (
+            <>
+              <Icon name="search" />
+              Investigate
+            </>
+          )}
         </button>
       </div>
       {confirm && (
@@ -381,10 +416,7 @@ function NotStarted({ serviceName, onStart }: { serviceName: string | null; onSt
           title="Start investigation?"
           confirmLabel="Investigate"
           confirmIcon="search"
-          onConfirm={() => {
-            setConfirm(false);
-            onStart();
-          }}
+          onConfirm={run}
           onCancel={() => setConfirm(false)}
           body={
             <span>

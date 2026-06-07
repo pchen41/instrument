@@ -129,11 +129,22 @@ function StartModeControl({ notify }: { notify: (message: string) => void }) {
   return <AutoInvestigateMenu value={mode} onChange={onChange} saving={saving} />;
 }
 
-function IncidentRow({ row, onInvestigate }: { row: IncidentWithState; onInvestigate: () => void }) {
+function IncidentRow({ row, onInvestigate }: { row: IncidentWithState; onInvestigate: () => Promise<void> }) {
   const { incident, display } = row;
   const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
   const resolved = incident.incident_state === 'resolved';
   const auto = incident.started_automatically && display !== 'new';
+
+  const run = async () => {
+    setConfirm(false);
+    setBusy(true);
+    try {
+      await onInvestigate();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <article className="inc">
@@ -157,9 +168,18 @@ function IncidentRow({ row, onInvestigate }: { row: IncidentWithState; onInvesti
         )}
         <div className="ifoot">
           {display === 'new' ? (
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => setConfirm(true)}>
-              <Icon name="search" />
-              Investigate
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setConfirm(true)} disabled={busy}>
+              {busy ? (
+                <>
+                  <span className="btn-spin" />
+                  Starting…
+                </>
+              ) : (
+                <>
+                  <Icon name="search" />
+                  Investigate
+                </>
+              )}
             </button>
           ) : (
             <Link className="btn btn-secondary btn-sm" to={`/incidents/${incident.id}`}>
@@ -175,10 +195,7 @@ function IncidentRow({ row, onInvestigate }: { row: IncidentWithState; onInvesti
           title="Start investigation?"
           confirmLabel="Investigate"
           confirmIcon="search"
-          onConfirm={() => {
-            setConfirm(false);
-            onInvestigate();
-          }}
+          onConfirm={run}
           onCancel={() => setConfirm(false)}
           body={
             <span>

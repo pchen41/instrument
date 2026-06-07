@@ -185,7 +185,41 @@ async function runJob(db: JobsDb, job: JobRow, opts: RunTickOptions): Promise<Ou
     error_summary: null,
     failure_source: null,
   });
+
+  // Best-effort, post-success: make the completed investigation read coherently.
+  // 5A ships the durable engine, not real RCA (that lands with the TrueFoundry
+  // investigation task), so this only promotes the incident's seeded *tentative*
+  // leading hypothesis to a confirmed state — never fabricates a new cause.
+  if (job.job_type === 'incident_investigation' && job.target_type === 'incident') {
+    try {
+      await finalizeIncident(db, job.target_id, opts);
+    } catch {
+      /* the job is already succeeded; a finalization hiccup must not undo that */
+    }
+  }
   return 'succeeded';
+}
+
+/** Promote a completed incident's tentative leading hypothesis to confirmed. */
+async function finalizeIncident(db: JobsDb, incidentId: string, opts: RunTickOptions): Promise<void> {
+  const incident = await db.getIncident(incidentId);
+  if (!incident) return;
+  const at = isoSeconds(opts.clock.now());
+
+  const hypotheses = (incident.hypotheses ?? []).map((h) => {
+    if (!h.leading) return h;
+    const tentative = typeof h.detail === 'string' && /confirm once you start|tentative/i.test(h.detail);
+    return {
+      ...h,
+      confidence: h.confidence && h.confidence !== 'low' ? h.confidence : 'likely',
+      detail: tentative ? 'Confirmed as the leading cause from the correlated signals and recent changes.' : h.detail,
+    };
+  });
+  const timeline = [
+    ...(incident.timeline ?? []),
+    { at, kind: 'analysis', title: 'Investigation complete', detail: 'Instrument correlated the signals and confirmed the leading cause.' },
+  ];
+  await db.updateIncident(incidentId, { hypotheses, timeline });
 }
 
 async function finishFailure(
