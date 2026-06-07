@@ -204,6 +204,28 @@ export function createScanStore(admin: Admin): ScanStore {
       return { id: (data as { id: string }[])[0].id, created: true };
     },
 
+    async loadChangedFiles(jobId) {
+      const { data, error } = await db.from('evidence_items').select('payload').eq('collected_by_job_id', jobId).eq('subject_key', codeKey(jobId)).limit(1).maybeSingle();
+      if (error) throw new JobError({ retryable: true, code: 'evidence_read_failed', summary: 'Could not read scanned files.', source: 'worker' });
+      const files = (data?.payload as { files?: string[] } | undefined)?.files;
+      return Array.isArray(files) ? files : [];
+    },
+
+    async listActiveInstrumentation(repositoryId) {
+      const { data, error } = await db.from('recommendations').select('id, dedupe_fingerprint, affected_code_path').eq('repository_id', repositoryId).eq('category', 'instrumentation').eq('state', 'active');
+      if (error) throw new JobError({ retryable: true, code: 'recommendation_read_failed', summary: 'Could not list active recommendations.', source: 'worker' });
+      return (data ?? []).map((r: any) => ({ id: r.id as string, dedupeFingerprint: (r.dedupe_fingerprint as string) ?? '', affectedCodePath: (r.affected_code_path as string) ?? '' }));
+    },
+
+    async outdateRecommendation(id, reason, now) {
+      const { data } = await db.from('recommendations').select('lifecycle_events').eq('id', id).maybeSingle();
+      const prior = Array.isArray(data?.lifecycle_events) ? (data!.lifecycle_events as unknown[]) : [];
+      const lifecycle = [...prior, { at: now, kind: 'outdated', reason }].slice(-50);
+      // state guard makes it idempotent — a re-run won't re-outdate / re-append.
+      const { error } = await db.from('recommendations').update({ state: 'outdated', outdated_reason: reason, outdated_at: now, lifecycle_events: lifecycle, updated_at: now }).eq('id', id).eq('state', 'active');
+      if (error) throw new JobError({ retryable: true, code: 'recommendation_write_failed', summary: 'Could not outdate the recommendation.', source: 'worker' });
+    },
+
     async loadPendingSha(jobId) {
       const { data, error } = await db.from('jobs').select('trigger_summary').eq('id', jobId).maybeSingle();
       if (error) throw new JobError({ retryable: true, code: 'job_read_failed', summary: 'Could not read the scan job.', source: 'worker' });

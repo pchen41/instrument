@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { makeScanExecutor, scanJobContext, type LoadedScanFindings, type ScanMcp, type ScanStore } from './agent-scan';
 import { type AgentInvoker, type ModelCallStore } from './model-call';
-import { type ScanFinding, scanFindingsSchema } from './scan';
+import { type ScanFinding, scanDedupeFingerprint, scanFindingsSchema } from './scan';
 import type { JobRow } from './types';
 
 const REPO = 'pchen41/instrument';
@@ -27,12 +27,12 @@ function fakeMcp(): ScanMcp & { reads: number } {
   const self: any = { reads: 0, readChangedCode: vi.fn(async () => { self.reads++; return { changedCode: '+ un-instrumented code', files: [{ path: 'src/a.ts' }], externalId: 'scan:x', payload: {} }; }) };
   return self;
 }
-function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string; pendingSha?: string | null } = {}) {
+function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string; pendingSha?: string | null; changedFiles?: string[]; activeRecs?: { id: string; dedupeFingerprint: string; affectedCodePath: string }[] } = {}) {
   const codes = new Map<string, string>();
   const findingsMap = new Map<string, LoadedScanFindings>();
   if (over.findings) findingsMap.set('scan-1', over.findings);
   const recs = new Map<string, { id: string; created: boolean }>();
-  const events = { followups: 0, upserts: 0 };
+  const events = { followups: 0, upserts: 0, outdated: [] as string[] };
   let seq = 0;
   const store: ScanStore = {
     hasCode: async (j) => codes.has(j),
@@ -43,6 +43,9 @@ function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string; 
     upsertInstrumentationRecommendation: async (i) => { events.upserts++; const ex = recs.get(i.dedupeFingerprint); if (ex) return { ...ex, created: false }; const r = { id: `rec-${++seq}`, created: true }; recs.set(i.dedupeFingerprint, r); return r; },
     enqueueFollowupScan: async () => { events.followups++; },
     loadPendingSha: async () => over.pendingSha ?? null,
+    loadChangedFiles: async () => over.changedFiles ?? [],
+    listActiveInstrumentation: async () => over.activeRecs ?? [],
+    outdateRecommendation: async (id) => { events.outdated.push(id); },
   };
   return { store, recs, events };
 }
@@ -92,6 +95,22 @@ describe('rank', () => {
     expect(recs.size).toBe(2);
     expect(events.upserts).toBe(3); // upsert called per finding; the 3rd folds onto handleA
   });
+  it('outdates a stale rec in a re-scanned file that is no longer flagged; leaves untouched files alone', async () => {
+    const f = finding({ file_path: 'src/a.ts', code_anchor: 'handleA' });
+    const currentFp = scanDedupeFingerprint(REPO, f);
+    const { store, events } = fakeStore({
+      findings: valid([f]),
+      changedFiles: ['src/a.ts'], // only a.ts was re-examined this scan
+      activeRecs: [
+        { id: 'stale-a', dedupeFingerprint: 'instr:OLDGAP', affectedCodePath: 'src/a.ts:oldAnchor' }, // re-examined, not re-flagged → outdate
+        { id: 'kept-a', dedupeFingerprint: currentFp, affectedCodePath: 'src/a.ts:handleA' }, // re-flagged → keep
+        { id: 'untouched-b', dedupeFingerprint: 'instr:OTHER', affectedCodePath: 'src/b.ts:x' }, // file not in this scan → keep
+      ],
+    });
+    await makeScanExecutor(deps(fakeMcp(), store))({ job: job(), phaseKey: 'rank', attempt: 1 });
+    expect(events.outdated).toEqual(['stale-a']);
+  });
+
   it('enqueues a coalesced follow-up for the LIVE pending sha (not the stale snapshot)', async () => {
     const { store, events } = fakeStore({ findings: valid([]), pendingSha: 'newer999' });
     await makeScanExecutor(deps(fakeMcp(), store))({ job: job(), phaseKey: 'rank', attempt: 1 });

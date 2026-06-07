@@ -110,6 +110,12 @@ export interface ScanStore {
   enqueueFollowupScan(workspaceId: string, repositoryId: string, repo: ScanJobContext['repo'], branch: string, sha: string, now: string): Promise<void>;
   /** The LIVE pending_sha from the job row (a push may have coalesced AFTER this scan was claimed). */
   loadPendingSha(jobId: string): Promise<string | null>;
+  /** The changed file paths this scan examined (for invalidating stale recommendations). */
+  loadChangedFiles(jobId: string): Promise<string[]>;
+  /** Active category-`instrumentation` recommendations for the repo (for the outdating sweep). */
+  listActiveInstrumentation(repositoryId: string): Promise<{ id: string; dedupeFingerprint: string; affectedCodePath: string }[]>;
+  /** Mark a recommendation `outdated` with a reason (lifecycle invalidation). */
+  outdateRecommendation(id: string, reason: string, now: string): Promise<void>;
 }
 
 export interface ScanDeps {
@@ -193,14 +199,17 @@ async function rank(deps: ScanDeps, ctx: ScanJobContext, jobId: string, now: () 
   if (!loaded) throw new JobError({ retryable: true, code: 'scan_findings_unavailable', summary: 'Scan findings were not available to rank.', source: 'worker' });
 
   if (loaded.validationStatus === 'valid') {
+    const currentFingerprints = new Set<string>();
     for (const finding of loaded.findings) {
+      const fingerprint = scanDedupeFingerprint(ctx.repo.fullName, finding);
+      currentFingerprints.add(fingerprint);
       const fields = recommendationFields(finding);
       await deps.store.upsertInstrumentationRecommendation({
         workspaceId: ctx.workspaceId,
         repositoryId: ctx.repositoryId,
         jobId,
         modelCallId: loaded.modelCallId,
-        dedupeFingerprint: scanDedupeFingerprint(ctx.repo.fullName, finding),
+        dedupeFingerprint: fingerprint,
         title: fields.title,
         rationale: fields.rationale,
         proposedNextStep: fields.proposedNextStep,
@@ -208,6 +217,22 @@ async function rank(deps: ScanDeps, ctx: ScanJobContext, jobId: string, now: () 
         severity: finding.severity,
         now: now().toISOString(),
       });
+    }
+
+    // Outdating lifecycle: a previously-recommended instrumentation gap in a file
+    // THIS scan re-examined (the file was in the changed set) but did NOT re-flag is
+    // treated as resolved/removed → mark it `outdated`. Recommendations for files
+    // this scan didn't touch are left untouched (not re-evaluated). This is bounded
+    // by the scan's changed-file scope, so it won't outdate unrelated findings.
+    const changedFiles = new Set(await deps.store.loadChangedFiles(jobId));
+    if (changedFiles.size > 0) {
+      const active = await deps.store.listActiveInstrumentation(ctx.repositoryId);
+      for (const rec of active) {
+        const recFile = rec.affectedCodePath.split(':')[0];
+        if (changedFiles.has(recFile) && !currentFingerprints.has(rec.dedupeFingerprint)) {
+          await deps.store.outdateRecommendation(rec.id, 'code_changed', now().toISOString());
+        }
+      }
     }
   }
 
