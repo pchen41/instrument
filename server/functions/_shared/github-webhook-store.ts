@@ -1,0 +1,231 @@
+// Deno-side persistence for GitHub webhook ingestion (Task 6). The pure decisions
+// (verify, parse, bound/redact, idempotency keys) live in server/lib/github-webhook.ts;
+// this is the PostgREST IO edge: record the delivery, resolve the allowlisted repo,
+// upsert the PR, and (verified analysis actions only) enqueue the analysis job.
+//
+// Repo allowlist = the `repositories` table. A delivery for a repo not present
+// there is recorded and ignored — never creating downstream rows ("limited to
+// configured repositories"). Unverified deliveries are recorded with
+// signature_valid=false and a minimal, non-forgeable note, never their payload.
+import { isUniqueViolation } from './agent-runtime.ts';
+import type { NormalizedPr, NormalizedRepo } from '../../lib/github-webhook.ts';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Admin = any;
+
+export interface RepoContext {
+  id: string;
+  workspaceId: string;
+  integrationId: string | null;
+  /** repositories.pr_review_enabled — per-repo scope. */
+  prReviewEnabled: boolean;
+  /** workspaces.pr_review_enabled — workspace-wide scope; BOTH must be true to enqueue. */
+  workspacePrReviewEnabled: boolean;
+}
+
+export interface InboundInsert {
+  workspaceId: string;
+  integrationId: string | null;
+  eventType: string;
+  eventAction: string | null;
+  externalDeliveryId: string;
+  providerCorrelationKey: string | null;
+  signatureValid: boolean;
+  headersRedacted: Record<string, unknown>;
+  payloadRedacted: Record<string, unknown>;
+  receivedAt: string;
+  processingStatus: 'received' | 'ignored' | 'processed' | 'failed';
+}
+
+export function createGithubWebhookStore(admin: Admin) {
+  const db = admin.database;
+
+  return {
+    /**
+     * The single configured workspace — home for unattributable (rejected)
+     * deliveries. A query error THROWS (→ 500 → GitHub redelivers) rather than
+     * returning null, so a transient DB blip never silently drops a delivery.
+     */
+    async defaultWorkspaceId(): Promise<string | null> {
+      const { data, error } = await db.from('workspaces').select('id').order('created_at', { ascending: true }).limit(1).maybeSingle();
+      if (error) throw error;
+      return (data?.id as string | undefined) ?? null;
+    },
+
+    /**
+     * Resolve an allowlisted repo by owner/name → workspace + integration + both
+     * pr_review flags, or null if not allowlisted. A query error THROWS (a null
+     * here would be misread as "not allowlisted" → 200 → GitHub never retries).
+     */
+    async findRepo(owner: string, name: string): Promise<RepoContext | null> {
+      const { data, error } = await db
+        .from('repositories')
+        .select('id, workspace_id, integration_id, pr_review_enabled')
+        .eq('github_owner', owner)
+        .eq('github_name', name)
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      const { data: ws, error: wsErr } = await db
+        .from('workspaces')
+        .select('pr_review_enabled')
+        .eq('id', data.workspace_id)
+        .maybeSingle();
+      if (wsErr) throw wsErr;
+      return {
+        id: data.id as string,
+        workspaceId: data.workspace_id as string,
+        integrationId: (data.integration_id as string | null) ?? null,
+        prReviewEnabled: data.pr_review_enabled !== false,
+        workspacePrReviewEnabled: ws?.pr_review_enabled !== false,
+      };
+    },
+
+    /**
+     * Keep allowlisted repo metadata fresh from the payload. Coalescing: only
+     * fields actually present in the payload are written, so a sparse delivery
+     * can never null out good values. Errors throw.
+     */
+    async refreshRepoMeta(repoId: string, repo: NormalizedRepo, now: string): Promise<void> {
+      const patch: Record<string, unknown> = { last_synced_at: now, updated_at: now };
+      if (repo.externalRepoId != null) patch.external_repo_id = repo.externalRepoId;
+      if (repo.defaultBranch) patch.default_branch = repo.defaultBranch;
+      if (repo.htmlUrl != null) patch.html_url = repo.htmlUrl;
+      if (repo.cloneUrl != null) patch.clone_url = repo.cloneUrl;
+      const { error } = await db.from('repositories').update(patch).eq('id', repoId);
+      if (error) throw error;
+    },
+
+    /**
+     * Record the delivery. Returns the row id and `duplicate` = whether the caller
+     * should SHORT-CIRCUIT (skip re-processing). The unique (provider,
+     * external_delivery_id) index is the idempotency anchor, but a unique hit alone
+     * is NOT enough to skip: we only short-circuit a delivery that already reached a
+     * terminal good state —
+     *   - `processed` (fully handled), or
+     *   - `ignored` AND signature_valid (a legitimately ignored valid delivery,
+     *     e.g. repo not allowlisted — a re-delivery would just be re-ignored).
+     * A row left at `received`/`failed` (a crash mid-processing) or a rejected
+     * `ignored`+signature_valid=false row (later re-delivered with a fixed secret)
+     * is REFRESHED and re-processed, so a redelivery can complete the work instead
+     * of being silently dropped. PR upsert + job enqueue are idempotent, so
+     * re-processing is safe.
+     */
+    async recordDelivery(row: InboundInsert): Promise<{ id: string; duplicate: boolean }> {
+      const insert = {
+        workspace_id: row.workspaceId,
+        provider: 'github',
+        integration_id: row.integrationId,
+        event_type: row.eventType,
+        event_action: row.eventAction,
+        external_delivery_id: row.externalDeliveryId,
+        provider_correlation_key: row.providerCorrelationKey,
+        auth_method: 'github_signature',
+        signature_valid: row.signatureValid,
+        headers_redacted: row.headersRedacted,
+        payload_redacted: row.payloadRedacted,
+        received_at: row.receivedAt,
+        processing_status: row.processingStatus,
+      };
+      const { data, error } = await db.from('inbound_webhooks').insert([insert]).select('id');
+      if (!error) return { id: (data as { id: string }[])[0].id, duplicate: false };
+      if (!isUniqueViolation(error)) throw error;
+
+      const { data: existing, error: selErr } = await db
+        .from('inbound_webhooks')
+        .select('id, processing_status, signature_valid')
+        .eq('provider', 'github')
+        .eq('external_delivery_id', row.externalDeliveryId)
+        .limit(1)
+        .maybeSingle();
+      if (selErr) throw selErr;
+      if (!existing?.id) throw error; // conflict with no visible row — surface it
+      const id = existing.id as string;
+      const terminal = existing.processing_status === 'processed' || (existing.processing_status === 'ignored' && existing.signature_valid === true);
+      if (terminal) return { id, duplicate: true };
+
+      // Non-terminal (crash mid-flight) or previously-rejected: refresh + re-process.
+      const { error: updErr } = await db
+        .from('inbound_webhooks')
+        .update({ ...insert, processed_at: null, error_summary: null })
+        .eq('id', id);
+      if (updErr) throw updErr;
+      return { id, duplicate: false };
+    },
+
+    async markDelivery(id: string, patch: { processingStatus: InboundInsert['processingStatus']; processedAt?: string; errorSummary?: string | null }): Promise<void> {
+      const { error } = await db
+        .from('inbound_webhooks')
+        .update({
+          processing_status: patch.processingStatus,
+          processed_at: patch.processedAt ?? null,
+          error_summary: patch.errorSummary ?? null,
+        })
+        .eq('id', id);
+      if (error) throw error;
+    },
+
+    /**
+     * Upsert a PR by (repository_id, external_pr_number). Select-then-write with a
+     * unique-violation fallback so a rare concurrent insert still resolves to one
+     * row. Returns the durable PR id (target_id for the analysis job).
+     */
+    async upsertPullRequest(workspaceId: string, repositoryId: string, pr: NormalizedPr, now: string): Promise<string> {
+      const fields = {
+        title: pr.title,
+        author_login: pr.authorLogin,
+        state: pr.state,
+        draft: pr.draft,
+        base_branch: pr.baseBranch,
+        head_branch: pr.headBranch,
+        head_sha: pr.headSha,
+        external_node_id: pr.nodeId,
+        html_url: pr.htmlUrl,
+        opened_at: pr.openedAt,
+        updated_at: pr.updatedAt,
+        closed_at: pr.closedAt,
+        merged_at: pr.mergedAt,
+        last_synced_at: now,
+      };
+      const { data: existing, error: selErr } = await db
+        .from('github_pull_requests')
+        .select('id')
+        .eq('repository_id', repositoryId)
+        .eq('external_pr_number', pr.number)
+        .limit(1)
+        .maybeSingle();
+      if (selErr) throw selErr;
+      if (existing?.id) {
+        const { error: updErr } = await db.from('github_pull_requests').update(fields).eq('id', existing.id);
+        if (updErr) throw updErr;
+        return existing.id as string;
+      }
+      const { data, error } = await db
+        .from('github_pull_requests')
+        .insert([{ workspace_id: workspaceId, repository_id: repositoryId, external_pr_number: pr.number, ...fields }])
+        .select('id');
+      if (error) {
+        if (isUniqueViolation(error)) {
+          const { data: row, error: reSelErr } = await db
+            .from('github_pull_requests')
+            .select('id')
+            .eq('repository_id', repositoryId)
+            .eq('external_pr_number', pr.number)
+            .limit(1)
+            .maybeSingle();
+          if (reSelErr) throw reSelErr;
+          if (row?.id) {
+            const { error: updErr } = await db.from('github_pull_requests').update(fields).eq('id', row.id);
+            if (updErr) throw updErr;
+            return row.id as string;
+          }
+        }
+        throw error;
+      }
+      return (data as { id: string }[])[0].id;
+    },
+  };
+}
+
+export type GithubWebhookStore = ReturnType<typeof createGithubWebhookStore>;

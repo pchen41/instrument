@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 // `node:crypto` is available in both Node (Vitest) and Deno (function runtime via
 // node-compat), so the same canonicalisation + digest runs in tests and in prod.
@@ -26,6 +26,15 @@ function sortDeep(value: unknown): unknown {
 
 export function sha256Hex(input: string): string {
   return createHash('sha256').update(input).digest('hex');
+}
+
+/**
+ * HMAC-SHA256 hex of `input` keyed by `secret` — GitHub's X-Hub-Signature-256
+ * body. Accepts the raw request bytes (Uint8Array) so the digest is taken over
+ * exactly what GitHub signed, not a re-encoded string.
+ */
+export function hmacSha256Hex(secret: string, input: string | Uint8Array): string {
+  return createHmac('sha256', secret).update(input).digest('hex');
 }
 
 /** SHA-256 of the canonical form of a payload — the approval payload hash. */

@@ -5,7 +5,7 @@
 import { build } from 'esbuild';
 import { mkdirSync } from 'node:fs';
 
-const FUNCTIONS = ['job-worker-tick', 'console-actions'];
+const FUNCTIONS = ['job-worker-tick', 'console-actions', 'github-webhook'];
 const OUT_DIR = 'server/dist';
 
 mkdirSync(OUT_DIR, { recursive: true });
