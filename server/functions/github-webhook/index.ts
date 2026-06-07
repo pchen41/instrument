@@ -24,13 +24,18 @@ import { isoSeconds, LEASE_FREE, systemClock } from '../../lib/time.ts';
 import {
   boundedHeaderValue,
   boundedPullRequestPayload,
+  boundedPushPayload,
+  decideScan,
   isAnalysisAction,
   isLifecycleAction,
+  isPrimaryBranchPush,
   parsePullRequestEvent,
+  parsePushEvent,
   prCorrelationKey,
   prLifecycleReason,
   prReviewJobKey,
   redactedHeaders,
+  scanJobKey,
   verifyGithubSignature,
 } from '../../lib/github-webhook.ts';
 
@@ -131,6 +136,88 @@ export default async function (req: Request): Promise<Response> {
       payload = JSON.parse(jsonText);
     } catch {
       return json({ error: 'bad_json' }, 400);
+    }
+
+    // --- Push events (Task 7): primary-branch pushes trigger proactive scans. ---
+    if (event === 'push') {
+      const push = parsePushEvent(payload);
+      const owner = push ? (payload as any)?.repository?.owner?.login ?? (payload as any)?.repository?.owner?.name : null;
+      const pushRepo = owner && (payload as any)?.repository?.name ? await store.findRepo(owner, (payload as any).repository.name) : null;
+      const pushWorkspace = pushRepo?.workspaceId ?? (await store.defaultWorkspaceId());
+      if (!pushWorkspace) return json({ error: 'no_workspace' }, 500);
+      // Record the delivery either way (ERD: record every push).
+      const onPrimary = !!(push && pushRepo && isPrimaryBranchPush(push, pushRepo.defaultBranch));
+      const pushDelivery = await store.recordDelivery({
+        workspaceId: pushWorkspace,
+        integrationId: pushRepo?.integrationId ?? null,
+        eventType: safeEvent,
+        eventAction: null,
+        externalDeliveryId: safeDelivery,
+        providerCorrelationKey: push ? `${(payload as any)?.repository?.full_name}@${push.branch}` : null,
+        signatureValid: true,
+        headersRedacted,
+        payloadRedacted: push ? boundedPushPayload(payload) : { event: safeEvent },
+        receivedAt: now,
+        processingStatus: onPrimary ? 'received' : 'ignored',
+      });
+      if (pushDelivery.duplicate) {
+        endSpan({ ok: true, deduped: true });
+        return json({ ok: true, deduped: true, delivery_id: safeDelivery });
+      }
+      if (!onPrimary || !push || !pushRepo) {
+        endSpan({ ok: true, ignored: true });
+        return json({ ok: true, ignored: pushRepo ? 'not_primary_branch' : 'repo_not_allowlisted' });
+      }
+      deliveryRowId = pushDelivery.id;
+      const decision = decideScan(push, await store.latestScan(pushRepo.id), pushRepo.scanCooldownSeconds, systemClock.now());
+      let scanJobId: string | null = null;
+      if (decision.action === 'coalesce') {
+        await store.markScanPending(decision.ontoJobId, decision.sha, now);
+      } else if (decision.action === 'enqueue') {
+        const key = scanJobKey(pushRepo.id, decision.sha);
+        const existing = await db.findJobByIdempotency(pushWorkspace, 'proactive_scan', key);
+        if (existing) {
+          scanJobId = existing.id;
+        } else {
+          const job = await db.insertJob({
+            workspace_id: pushWorkspace,
+            job_type: 'proactive_scan',
+            state: 'queued',
+            target_type: 'repository',
+            target_id: pushRepo.id,
+            idempotency_key: key,
+            created_by: null,
+            safe_to_retry: true,
+            attempt_count: 0,
+            max_attempts: 3,
+            retry_policy: {},
+            phases: [],
+            attempts: [],
+            audit_events: [{ at: now, kind: 'enqueued', summary: `Primary-branch push ${decision.sha.slice(0, 7)}` }],
+            trigger_summary: {
+              source: 'github_push',
+              webhook_event_id: pushDelivery.id,
+              repo: { owner, name: (payload as any).repository.name, full_name: (payload as any)?.repository?.full_name },
+              branch: push.branch,
+              after_sha: decision.sha,
+              before_sha: push.before,
+              head_commit_sha: push.headCommitSha,
+              commit_count: push.commitCount,
+              compare_url: push.compareUrl,
+              pending_sha: null,
+            },
+            queued_at: now,
+            next_run_at: decision.runAt,
+            lease_expires_at: LEASE_FREE,
+            locked_by: null,
+            progress_version: 1,
+          });
+          scanJobId = job.id;
+        }
+      }
+      await store.markDelivery(pushDelivery.id, { processingStatus: 'processed', processedAt: isoSeconds(systemClock.now()) });
+      endSpan({ ok: true, scan: decision.action, scanJobId });
+      return json({ ok: true, scan: decision.action, scan_job_id: scanJobId, reason: decision.action === 'skip' ? decision.reason : undefined });
     }
 
     const parsed = event === 'pull_request' ? parsePullRequestEvent(payload) : null;

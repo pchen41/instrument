@@ -9,7 +9,7 @@
 // signature_valid=false and a minimal, non-forgeable note, never their payload.
 import { isUniqueViolation } from './agent-runtime.ts';
 import { prReviewDedupeFingerprint } from '../../lib/pr-review.ts';
-import type { NormalizedPr, NormalizedRepo } from '../../lib/github-webhook.ts';
+import type { LatestScan, NormalizedPr, NormalizedRepo } from '../../lib/github-webhook.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Admin = any;
@@ -22,6 +22,10 @@ export interface RepoContext {
   prReviewEnabled: boolean;
   /** workspaces.pr_review_enabled — workspace-wide scope; BOTH must be true to enqueue. */
   workspacePrReviewEnabled: boolean;
+  /** repositories.default_branch — the configured primary branch for scans. */
+  defaultBranch: string;
+  /** workspaces.primary_branch_scan_cooldown_seconds. */
+  scanCooldownSeconds: number;
 }
 
 export interface InboundInsert {
@@ -61,7 +65,7 @@ export function createGithubWebhookStore(admin: Admin) {
     async findRepo(owner: string, name: string): Promise<RepoContext | null> {
       const { data, error } = await db
         .from('repositories')
-        .select('id, workspace_id, integration_id, pr_review_enabled')
+        .select('id, workspace_id, integration_id, pr_review_enabled, default_branch')
         .eq('github_owner', owner)
         .eq('github_name', name)
         .limit(1)
@@ -70,16 +74,19 @@ export function createGithubWebhookStore(admin: Admin) {
       if (!data) return null;
       const { data: ws, error: wsErr } = await db
         .from('workspaces')
-        .select('pr_review_enabled')
+        .select('pr_review_enabled, primary_branch_scan_cooldown_seconds')
         .eq('id', data.workspace_id)
         .maybeSingle();
       if (wsErr) throw wsErr;
+      const cooldown = Number(ws?.primary_branch_scan_cooldown_seconds);
       return {
         id: data.id as string,
         workspaceId: data.workspace_id as string,
         integrationId: (data.integration_id as string | null) ?? null,
         prReviewEnabled: data.pr_review_enabled !== false,
         workspacePrReviewEnabled: ws?.pr_review_enabled !== false,
+        defaultBranch: (data.default_branch as string | undefined) ?? 'main',
+        scanCooldownSeconds: Number.isFinite(cooldown) ? cooldown : 30,
       };
     },
 
@@ -255,6 +262,30 @@ export function createGithubWebhookStore(admin: Admin) {
         .eq('id', data.id);
       if (updErr) throw updErr;
       return true;
+    },
+
+    /** The most recent proactive_scan job for a repo (for cooldown/coalescing). */
+    async latestScan(repositoryId: string): Promise<LatestScan | null> {
+      const { data, error } = await db
+        .from('jobs')
+        .select('id, state, trigger_summary, completed_at')
+        .eq('job_type', 'proactive_scan')
+        .eq('target_id', repositoryId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      const ts = (data.trigger_summary ?? {}) as { after_sha?: string };
+      return { id: data.id as string, state: data.state as string, afterSha: ts.after_sha ?? '', completedAt: (data.completed_at as string | null) ?? null };
+    },
+
+    /** Coalesce: stamp the newest head SHA onto an in-flight scan's trigger_summary. */
+    async markScanPending(jobId: string, sha: string, now: string): Promise<void> {
+      const { data } = await db.from('jobs').select('trigger_summary').eq('id', jobId).maybeSingle();
+      const ts = (data?.trigger_summary ?? {}) as Record<string, unknown>;
+      const { error } = await db.from('jobs').update({ trigger_summary: { ...ts, pending_sha: sha, pending_marked_at: now } }).eq('id', jobId);
+      if (error) throw error;
     },
 
     /**

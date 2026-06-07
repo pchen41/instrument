@@ -53,6 +53,118 @@ export function prLifecycleReason(merged: boolean): string {
   return merged ? 'pr_merged' : 'pr_closed';
 }
 
+// ---- Push events (Task 7) ----------------------------------------------------
+
+const ZERO_SHA = '0000000000000000000000000000000000000000';
+
+export interface NormalizedPush {
+  ref: string; // refs/heads/main
+  branch: string; // main
+  before: string;
+  after: string; // newest commit SHA on the branch
+  created: boolean;
+  deleted: boolean;
+  forced: boolean;
+  headCommitSha: string | null;
+  commitCount: number;
+  pusherName: string | null;
+  compareUrl: string | null;
+}
+
+/** Normalize a `push` event, or null if it lacks the fields needed to act. */
+export function parsePushEvent(payload: Json): NormalizedPush | null {
+  const ref = str(payload?.ref);
+  const after = str(payload?.after);
+  const repository = payload?.repository;
+  if (!ref || !after || !repository || !ref.startsWith('refs/heads/')) return null;
+  const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+  return {
+    ref,
+    branch: ref.slice('refs/heads/'.length),
+    before: str(payload?.before) ?? ZERO_SHA,
+    after,
+    created: payload?.created === true,
+    deleted: payload?.deleted === true || after === ZERO_SHA,
+    forced: payload?.forced === true,
+    headCommitSha: str(payload?.head_commit?.id),
+    commitCount: commits.length,
+    pusherName: str(payload?.pusher?.name),
+    compareUrl: str(payload?.compare),
+  };
+}
+
+/** True for a non-deleting push to the repo's primary branch (the only scan trigger). */
+export function isPrimaryBranchPush(push: NormalizedPush, defaultBranch: string): boolean {
+  return !push.deleted && push.after !== ZERO_SHA && push.branch === defaultBranch;
+}
+
+/**
+ * Bounded, secret-free snapshot for `inbound_webhooks.payload_redacted` (ERD push
+ * field list). Commit messages are scrubbed + the commit array is capped.
+ */
+export function boundedPushPayload(payload: Json): Record<string, unknown> {
+  const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+  return {
+    ref: str(payload?.ref),
+    before: str(payload?.before),
+    after: str(payload?.after),
+    base_ref: str(payload?.base_ref),
+    compare: str(payload?.compare),
+    created: payload?.created === true,
+    deleted: payload?.deleted === true,
+    forced: payload?.forced === true,
+    pusher: { name: str(payload?.pusher?.name) },
+    head_commit: payload?.head_commit
+      ? { id: str(payload?.head_commit?.id), message: scrubbed(payload?.head_commit?.message)?.slice(0, 300) ?? null, timestamp: str(payload?.head_commit?.timestamp) }
+      : null,
+    commits: commits.slice(0, 20).map((c: Json) => ({ id: str(c?.id), message: scrubbed(c?.message)?.slice(0, 200) ?? null })),
+    commit_count: commits.length,
+    repository: { full_name: str(payload?.repository?.full_name), default_branch: str(payload?.repository?.default_branch) },
+  };
+}
+
+/** Stable idempotency key for a primary-branch scan: one per repo + head SHA. */
+export function scanJobKey(repositoryId: string, sha: string): string {
+  return `scan:${repositoryId}:${sha}`;
+}
+
+/** The most recent proactive_scan job for a repo, as the store reports it for coalescing. */
+export interface LatestScan {
+  id: string;
+  state: string; // queued | running | retrying | succeeded | failed
+  afterSha: string;
+  completedAt: string | null;
+}
+
+export type ScanDecision =
+  | { action: 'enqueue'; sha: string; runAt: string } // runAt may be deferred past a cooldown
+  | { action: 'coalesce'; ontoJobId: string; sha: string } // mark pending_sha on the in-flight scan
+  | { action: 'skip'; reason: string };
+
+/**
+ * Cooldown + coalescing (ERD): one scan per repo at a time, throttled by
+ * `primary_branch_scan_cooldown_seconds`.
+ *  - no prior scan → enqueue now
+ *  - same head SHA already scanned/scanning → skip (idempotent)
+ *  - a scan is in-flight → coalesce: mark the newest SHA pending; the running scan
+ *    enqueues one follow-up for it when it finishes
+ *  - last scan finished within the cooldown → enqueue but DEFER to (completed + cooldown)
+ *  - otherwise → enqueue now
+ */
+export function decideScan(push: NormalizedPush, latest: LatestScan | null, cooldownSeconds: number, now: Date): ScanDecision {
+  const nowIso = now.toISOString();
+  if (!latest) return { action: 'enqueue', sha: push.after, runAt: nowIso };
+  if (latest.afterSha === push.after && latest.state !== 'failed') return { action: 'skip', reason: 'head sha already scanned or in flight' };
+  if (latest.state === 'queued' || latest.state === 'running' || latest.state === 'retrying') {
+    return { action: 'coalesce', ontoJobId: latest.id, sha: push.after };
+  }
+  if (latest.state === 'succeeded' && latest.completedAt) {
+    const readyAt = new Date(new Date(latest.completedAt).getTime() + cooldownSeconds * 1000);
+    if (readyAt > now) return { action: 'enqueue', sha: push.after, runAt: readyAt.toISOString() };
+  }
+  return { action: 'enqueue', sha: push.after, runAt: nowIso };
+}
+
 // ---- Normalized payload shapes ----------------------------------------------
 
 export interface NormalizedRepo {

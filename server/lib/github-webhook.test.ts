@@ -3,13 +3,18 @@ import { hmacSha256Hex } from './hash';
 import {
   boundedHeaderValue,
   boundedPullRequestPayload,
+  boundedPushPayload,
+  decideScan,
   isAnalysisAction,
   isLifecycleAction,
+  isPrimaryBranchPush,
   parsePullRequestEvent,
+  parsePushEvent,
   prCorrelationKey,
   prLifecycleReason,
   prReviewJobKey,
   redactedHeaders,
+  scanJobKey,
   verifyGithubSignature,
 } from './github-webhook';
 
@@ -209,5 +214,86 @@ describe('idempotency keys', () => {
   it('builds a stable PR correlation key', () => {
     const parsed = parsePullRequestEvent(prPayload())!;
     expect(prCorrelationKey(parsed.repo, parsed.pr.number)).toBe('pchen41/instrument#42');
+  });
+});
+
+// ---- Push events (Task 7) ----------------------------------------------------
+
+function pushPayload(over: { ref?: string; after?: string; deleted?: boolean } = {}): Record<string, unknown> {
+  return {
+    ref: over.ref ?? 'refs/heads/main',
+    before: 'before00',
+    after: over.after ?? 'after111',
+    created: false,
+    deleted: over.deleted ?? false,
+    forced: false,
+    compare: 'https://github.com/pchen41/instrument/compare/before00...after111',
+    pusher: { name: 'octocat' },
+    head_commit: { id: 'after111', message: 'feat: add thing', timestamp: '2026-06-07T10:00:00Z' },
+    commits: [{ id: 'c1', message: 'feat: add thing' }, { id: 'c2', message: 'token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' }],
+    repository: { full_name: 'pchen41/instrument', name: 'instrument', owner: { login: 'pchen41' }, default_branch: 'main' },
+  };
+}
+
+describe('parsePushEvent', () => {
+  it('normalizes a branch push', () => {
+    const p = parsePushEvent(pushPayload())!;
+    expect(p).toMatchObject({ branch: 'main', after: 'after111', deleted: false, commitCount: 2, pusherName: 'octocat' });
+  });
+  it('marks a branch deletion (zero after sha) as deleted', () => {
+    const p = parsePushEvent(pushPayload({ after: '0000000000000000000000000000000000000000' }))!;
+    expect(p.deleted).toBe(true);
+  });
+  it('returns null for a non-branch ref (tag)', () => {
+    expect(parsePushEvent(pushPayload({ ref: 'refs/tags/v1' }))).toBeNull();
+  });
+});
+
+describe('isPrimaryBranchPush', () => {
+  it('is true only for a non-deleting push to the default branch', () => {
+    expect(isPrimaryBranchPush(parsePushEvent(pushPayload())!, 'main')).toBe(true);
+    expect(isPrimaryBranchPush(parsePushEvent(pushPayload({ ref: 'refs/heads/feature' }))!, 'main')).toBe(false);
+    expect(isPrimaryBranchPush(parsePushEvent(pushPayload({ deleted: true }))!, 'main')).toBe(false);
+  });
+});
+
+describe('boundedPushPayload', () => {
+  it('keeps bounded push fields and scrubs commit messages', () => {
+    const b = boundedPushPayload(pushPayload());
+    expect(b).toMatchObject({ ref: 'refs/heads/main', after: 'after111', commit_count: 2 });
+    expect(JSON.stringify(b)).not.toMatch(/ghp_/);
+  });
+});
+
+describe('decideScan', () => {
+  const push = parsePushEvent(pushPayload())!;
+  const now = new Date('2026-06-07T12:00:00.000Z');
+  it('enqueues when there is no prior scan', () => {
+    expect(decideScan(push, null, 30, now)).toMatchObject({ action: 'enqueue', sha: 'after111' });
+  });
+  it('skips when the same head sha is already scanned/scanning', () => {
+    expect(decideScan(push, { id: 'j', state: 'running', afterSha: 'after111', completedAt: null }, 30, now).action).toBe('skip');
+  });
+  it('coalesces onto an in-flight scan of a different sha', () => {
+    const d = decideScan(push, { id: 'j9', state: 'running', afterSha: 'older', completedAt: null }, 30, now);
+    expect(d).toMatchObject({ action: 'coalesce', ontoJobId: 'j9', sha: 'after111' });
+  });
+  it('defers when the last scan finished within the cooldown', () => {
+    const completedAt = new Date(now.getTime() - 10_000).toISOString(); // 10s ago, cooldown 30s
+    const d = decideScan(push, { id: 'j', state: 'succeeded', afterSha: 'older', completedAt }, 30, now);
+    expect(d.action).toBe('enqueue');
+    if (d.action === 'enqueue') expect(new Date(d.runAt).getTime()).toBeGreaterThan(now.getTime());
+  });
+  it('enqueues now when the cooldown has elapsed', () => {
+    const completedAt = new Date(now.getTime() - 60_000).toISOString(); // 60s ago > 30s cooldown
+    const d = decideScan(push, { id: 'j', state: 'succeeded', afterSha: 'older', completedAt }, 30, now);
+    expect(d).toMatchObject({ action: 'enqueue', runAt: now.toISOString() });
+  });
+});
+
+describe('scanJobKey', () => {
+  it('is one key per repo + head sha', () => {
+    expect(scanJobKey('repo-1', 'sha-a')).toBe('scan:repo-1:sha-a');
+    expect(scanJobKey('repo-1', 'sha-a')).not.toBe(scanJobKey('repo-1', 'sha-b'));
   });
 });
