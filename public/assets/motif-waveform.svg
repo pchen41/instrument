@@ -1,0 +1,5 @@
+<svg width="320" height="80" viewBox="0 0 320 80" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="signal waveform">
+  <path d="M0 40 H40 L52 40 L60 18 L72 62 L84 28 L96 52 L104 40 H150 L160 40 L168 26 L180 54 L192 40 H320" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+  <circle cx="72" cy="62" r="4" fill="#C9534A"></circle>
+  <circle cx="60" cy="18" r="4" fill="#0F766E"></circle>
+</svg>

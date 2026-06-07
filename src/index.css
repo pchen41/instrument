@@ -1,0 +1,46 @@
+/* Design tokens first so the CSS variables exist for everything below. */
+@import './styles/tokens.css';
+/* Adapted prototype component CSS (console shell + auth). The first scaffold
+   imports these directly — see tasks/task-1.md. */
+@import './styles/console.css';
+@import './styles/auth.css';
+
+/* Tailwind layers are available alongside the prototype CSS. New UI can use
+   utilities; the shell currently leans on the imported component CSS. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tailwind's preflight resets some elements the prototype CSS styled; keep the
+   warm-paper baseline regardless of layer ordering. */
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+/* ----------------------------------------------------------------------------
+   Phosphor React icon wrapper.
+   The prototype sized its inline-SVG icons through CSS rules like
+   `.nav-item i{font-size:18px}`. The production <Icon> renders a Phosphor SVG
+   sized at 1em inside an <i>, so those same font-size rules keep driving icon
+   size and the icon inherits `currentColor`.
+   ------------------------------------------------------------------------- */
+.i-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  flex: none;
+}
+.i-ic > svg {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+}

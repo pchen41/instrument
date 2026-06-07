@@ -2,7 +2,13 @@
 
 ## Status
 
-Not started (scaffold). Pre-flight readiness verified 2026-06-06 — see Progress Notes.
+Scaffold complete (2026-06-06). Vite + React + TypeScript app, sign-in-only
+InsForge auth, route guards, and the console shell (sidebar nav, connected
+sources, profile area, three routable sections) are implemented. Typecheck,
+unit/component tests (33 passing), and the production build all pass. The one
+open item is the manual end-to-end sign-in, which needs the demo login user the
+user will create (see Progress Notes). Pre-flight readiness was verified earlier
+the same day — see Progress Notes.
 
 ## Context
 
@@ -103,3 +109,90 @@ Open items / what's needed before sign-in can be verified end-to-end:
 Heads-up (not Task 1): `docs/CONFIG.md` is untracked, holds live secrets (Datadog key,
 TrueFoundry PAT, GitHub PAT), and is **not** in `.gitignore` (only `.env*` is).
 CLAUDE.md says do not commit it — recommend adding `docs/CONFIG.md` to `.gitignore`.
+
+### 2026-06-06 — Scaffold implemented
+
+Built the production frontend scaffold, sign-in-only auth, and the console shell.
+
+**Stack & tooling**
+- Vite 5 + React 18 + TypeScript (strict), Tailwind CSS 3.4 (PostCSS), Vitest +
+  Testing Library + jsdom. Deps: `@insforge/sdk` (resolved 1.3.1),
+  `@phosphor-icons/react` 2.1, `react-router-dom` 6, `@datadog/browser-rum` 5.
+- Scripts: `npm run dev`, `npm run build` (`tsc --noEmit && vite build`),
+  `npm test` (`vitest run`), `npm run typecheck`.
+
+**Routing & auth**
+- `BrowserRouter` with `/sign-in` and guarded console routes `/incidents`,
+  `/recommendations`, `/integrations` (`/` and `*` redirect to `/incidents`).
+- `AuthProvider` wraps `insforge.auth` (`getCurrentUser` on mount to rehydrate via
+  the httpOnly refresh cookie, `signInWithPassword`, `signOut`). `RequireAuth`
+  guards console routes; the sign-in route redirects already-authed users.
+  Guard logic is split into pure `protectedRouteDecision` / `signInRouteDecision`
+  for unit testing; a short loading state prevents a sign-in flash on refresh.
+- Sign-in page adapts the auth prototype's minimal variation: username/password
+  only. **No signup toggle and no OAuth** (PRD SEC-2/SEC-3) — even though the
+  backend currently has `github`/`google` OAuth providers enabled, they are not
+  surfaced in the demo UI.
+
+**Console shell**
+- `ConsoleLayout` = warm-paper grid with sidebar + sticky topbar + `<Outlet>`.
+  Sidebar: Instrument brand, the three nav items, connected-sources list (static
+  demo config in `src/data/sources.ts`: Datadog + GitHub connected, TrueFoundry
+  not), and a profile area that signs the user out.
+- Incidents and Recommendations render calm empty states (server-backed data
+  arrives in later tasks). Integrations renders the preconfigured sources as
+  cards; the connect control is a **non-interactive status**, not an active
+  connect flow (self-serve connect is out of scope).
+- The incident **"Generate fix" PR workflow is intentionally omitted** — see the
+  code comment in `src/routes/console/Incidents.tsx`. No such active demo action
+  exists.
+
+**Design assets**
+- Copied the prototype's design-token CSS (`colors_and_type.css`) and component
+  CSS (`app.css`, `auth.css`) into `src/styles/` and import them in `index.css`
+  (asset `url()`s repointed to `/assets/...`; token `@import` consolidated). This
+  is the allowed "import/adapt prototype CSS directly" path; Tailwind is present
+  and its token palette mirrors the design system in `tailwind.config.js`.
+- Logos/SVGs copied to `public/assets/`. Icons use `@phosphor-icons/react` via
+  `src/components/Icon.tsx`, whose friendly-name → component map mirrors the
+  prototype's `assets/icons.js`; rendered at `weight="regular"`, sized at `1em`
+  inside an `<i>` so the prototype's font-size-based icon sizing still applies.
+
+**Telemetry (Task 1 owns the frontend RUM wrapper)**
+- `src/lib/telemetry.ts`: `createTelemetry(config, loader)` returns a no-op when
+  browser-safe RUM config is absent (RUM SDK never loaded) and lazily
+  `import()`s `@datadog/browser-rum` and `init()`s it only when
+  `VITE_DD_RUM_APPLICATION_ID` + `VITE_DD_RUM_CLIENT_TOKEN` are both present.
+  Exposes `recordRouteChange` (wired to router location), `recordConsoleLoadFailure`,
+  `recordUserActionFailure` (wired to sign-in/out), and `recordApiFailure` for
+  later views. Build confirms the RUM SDK is split into a separate lazy chunk
+  referenced only via `import()` (no modulepreload), so it is not fetched when
+  RUM is off. The demo runs with RUM absent.
+
+**Environment**
+- `.env.example` (committed) documents browser-safe vars only, with explicit
+  warnings against admin/provider secrets. `.env.local` (gitignored) created with
+  `VITE_INSFORGE_URL` and the browser-safe `VITE_INSFORGE_ANON_KEY`
+  (from `npx @insforge/cli secrets get ANON_KEY`). No admin `ik_...` key or
+  provider secret is in any frontend env or committed file (verified by scan).
+  `.gitignore` already covered `docs/CONFIG.md`; added `.DS_Store`.
+
+**Tests / checks run**
+- `npx tsc --noEmit` → clean.
+- `npx vitest run` → **5 files, 33 tests passing**: sign-in validation
+  (`src/auth/validation.test.ts`), route-guard decisions + `RequireAuth` component
+  redirect/allow/loading (`src/auth/guard.test.ts`, `RequireAuth.test.tsx`),
+  console shell renders the three nav items + branding + profile + sources
+  (`src/routes/console/shell.test.tsx`), and the telemetry wrapper no-op-without-
+  config / init-with-config (`src/lib/telemetry.test.ts`).
+- `npm run build` → **success**. Output ~ entry JS 416K (120K gzip incl. Phosphor),
+  CSS 44K (9K gzip); Datadog RUM in a separate ~165K lazy chunk.
+- Dev server smoke: `vite` serves `/` and the SPA fallback for `/incidents`.
+
+**Open item (owner: user) — blocks only manual sign-in verification**
+- No usable demo login user exists yet (only an anonymous `anon@example.com` with
+  no password). The scaffold + sign-in UI are built and unit-tested, but the
+  manual "sign in with the configured demo user / confirm refresh + sign-out"
+  steps cannot be exercised until a real username/password user is created.
+  `requireEmailVerification` is already off, so a created user can sign in
+  immediately.
