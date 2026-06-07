@@ -2,7 +2,24 @@
 
 ## Status
 
-Not started.
+**Done + live-proven (2026-06-07).** A `datadog-webhook` edge function ingests the
+template-driven Datadog alert contract, authenticates a shared-secret custom header,
+and drives the incident lifecycle + investigation-start. Reviewed by Gemini + Codex +
+Claude (all three returned; HIGH/MED/LOW applied).
+
+- Files: `server/lib/datadog-webhook.ts` (auth compare, contract parse, synth keys,
+  transition + start-mode decisions, bounded snapshots), `server/functions/_shared/
+  datadog-webhook-store.ts` (delivery record, workspace config, incident
+  create/update/resolve, investigation enqueue, alert evidence),
+  `server/functions/datadog-webhook/index.ts` (endpoint). Bundled via build-functions.
+- Live e2e (authenticated fixture POSTs to the deployed function, smart mode): bad
+  token → 401 (rejected row, hourly-bucketed); reliability firing → incident created +
+  `incident_investigation` enqueued + `started_automatically=true`; replay → deduped;
+  ambiguous firing → created, NOT auto-started; recovery → resolved. `trace_id`
+  preserved in the job `trigger_summary` + the `datadog_alert_event` evidence.
+- The enqueued `incident_investigation` job runs in the worker but is a no-op until
+  Task 11 supplies the investigation executor (the enqueue + linkage is what Task 10
+  delivers).
 
 ## Context
 
@@ -93,4 +110,27 @@ investigation.
 
 ## Progress Notes
 
-- Update this section with webhook URL, expected Datadog template, auth method, and smart-mode rule.
+- **Webhook URL:** `https://m5h8zr7r.us-east.insforge.app/functions/datadog-webhook`.
+- **Auth:** `shared_secret_header`. The Datadog webhook template must send the custom
+  header `X-Instrument-Webhook-Token: <DATADOG_WEBHOOK_SECRET>`; the handler does a
+  constant-time hash compare and fails CLOSED (no secret → 500, bad/absent token →
+  401 with a minimal rejected `inbound_webhooks` row, no payload trust). The secret
+  is the `DATADOG_WEBHOOK_SECRET` InsForge function secret.
+- **Datadog template (minimum JSON contract, ERD):** emit `alert_id`,
+  `alert_cycle_key`, `alert_transition`, `event_id`, `event_url`, `event_title`,
+  `event_msg`, `event_type`, `date`, `last_updated`, `tags`, plus `service`/`env`/
+  `instrument_reliability`/`trace_id`/`request_id` from `$TAGS[...]`. Unrendered
+  `$VAR`s are treated as absent.
+- **Key synthesis:** `external_delivery_id` + `alert_transition_key` use a STABLE
+  payload timestamp (`last_updated`/`date` raw, '' sentinel if absent — never the
+  server clock, so replays dedupe). `incident_correlation_key` = `dd:<alert_cycle_key>`
+  (or `dd:<monitor>:<service>:<env>`).
+- **Smart-mode rule (deterministic, pre-investigation):** auto-start when the
+  `instrument_reliability` tag is truthy (the Task 12 reliability monitor), or when
+  `workspaces.smart_start_rules` matches (`reliability_tag`, `monitor_ids[]`,
+  `title_keywords[]`). Workspace is configured `smart`; rules `{}` → reliability tag.
+- **Routing:** single configured workspace (a Datadog delivery is not repo-scoped).
+- **Datadog-side channel:** configure a Datadog webhook channel pointing at the URL
+  above with the custom header, then add it as a monitor `@webhook-...` notification.
+  Paired with Task 12 (publishing the reliability monitor that uses it). Task 10 is
+  verified via authenticated fixture POSTs (ERD-sanctioned).
