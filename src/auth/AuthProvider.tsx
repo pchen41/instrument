@@ -35,6 +35,24 @@ function clearStoredRefreshToken(): void {
   }
 }
 
+interface SessionResponse {
+  accessToken?: string;
+  refreshToken?: string;
+  user?: AuthUser;
+}
+
+// Seed every SDK surface (database/storage/realtime) with the access token and
+// persist the rotated refresh token for the next reload + in-session refresh.
+function applySession(data: SessionResponse): AuthUser | null {
+  if (!data.accessToken) return null;
+  insforge.setAccessToken(data.accessToken);
+  if (data.refreshToken) {
+    insforge.getHttpClient().setRefreshToken(data.refreshToken);
+    storeRefreshToken(data.refreshToken);
+  }
+  return data.user ?? null;
+}
+
 /** Re-mint an SDK session from the persisted refresh token. Returns the user or null. */
 async function restoreSession(): Promise<AuthUser | null> {
   let refreshToken: string | null = null;
@@ -54,23 +72,7 @@ async function restoreSession(): Promise<AuthUser | null> {
       clearStoredRefreshToken();
       return null;
     }
-    const data = (await res.json()) as {
-      accessToken?: string;
-      refreshToken?: string;
-      user?: AuthUser;
-    };
-    if (!data.accessToken) {
-      clearStoredRefreshToken();
-      return null;
-    }
-    // Seed every SDK surface (database/storage/realtime) with the fresh token,
-    // and hand the SDK the rotated refresh token for in-session auto-refresh.
-    insforge.setAccessToken(data.accessToken);
-    if (data.refreshToken) {
-      insforge.getHttpClient().setRefreshToken(data.refreshToken);
-      storeRefreshToken(data.refreshToken);
-    }
-    return data.user ?? null;
+    return applySession((await res.json()) as SessionResponse);
   } catch {
     return null;
   }
@@ -129,19 +131,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(
     async (email: string, password: string): Promise<SignInResult> => {
       try {
-        const { data, error } = await insforge.auth.signInWithPassword({
-          email: email.trim(),
-          password,
+        // Sign in through the token-based ("mobile") endpoint: unlike the browser
+        // endpoint (which returns the refresh token only as an httpOnly cookie),
+        // this returns it in the body so we can persist it and survive a reload
+        // even though the SPA and API are on different domains.
+        const res = await fetch(`${insforgeUrl}/api/auth/sessions?client_type=mobile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${insforgeAnonKey}` },
+          body: JSON.stringify({ email: email.trim(), password }),
         });
-        if (error) {
-          telemetry.recordUserActionFailure('sign_in', error);
-          return { ok: false, error: error.message || 'Sign in failed.' };
+        if (!res.ok) {
+          let message = 'Sign in failed.';
+          try {
+            const body = (await res.json()) as { message?: string; error?: { message?: string } };
+            message = body.error?.message || body.message || message;
+          } catch {
+            /* non-JSON error body */
+          }
+          telemetry.recordUserActionFailure('sign_in', message);
+          return { ok: false, error: res.status === 401 ? 'Incorrect email or password.' : message };
         }
-        const session = data as { user?: AuthUser; refreshToken?: string } | null;
-        // Persist the refresh token so a page reload can re-mint the session
-        // (the SDK already holds it in memory for this tab).
-        storeRefreshToken(session?.refreshToken);
-        setUser(session?.user ?? null);
+        const user = applySession((await res.json()) as SessionResponse);
+        setUser(user);
         return { ok: true };
       } catch (err) {
         telemetry.recordUserActionFailure('sign_in', err);
