@@ -1,3 +1,4 @@
+import type { PhaseExecutor } from './agent';
 import type { JobsDb } from './db';
 import { mergePhases, planFor } from './phases';
 import { classifyError, decideAfterFailure, JobError, resolvePolicy } from './retry';
@@ -18,6 +19,20 @@ export interface RunTickOptions {
   maxJobs?: number;
   /** Per-phase delay; tiny in prod for a visible progression, 0 in tests. */
   phaseDelayMs?: number;
+  /**
+   * Real per-phase work (Task 5B viability path): a TrueFoundry gateway turn / MCP
+   * tool call with idempotent persistence. Runs while the phase is `running`, may
+   * throw a JobError to drive retry/terminal handling, and is a no-op for jobs not
+   * flagged as a viability run — so the 5A simulated path is untouched.
+   */
+  executePhase?: PhaseExecutor;
+  /**
+   * Bounded phases per invocation (Task 5B). When set, a tick processes at most
+   * this many phases then requeues the job through `next_run_at` for the next
+   * tick to resume — the ERD's "process bounded phases, requeue the rest" model.
+   * Unset (5A default) processes the whole job in one invocation.
+   */
+  maxPhasesPerTick?: number;
 }
 
 export interface TickResult {
@@ -26,6 +41,8 @@ export interface TickResult {
   retrying: number;
   failed: number;
   skipped: number;
+  /** Jobs that hit the per-tick phase budget and were requeued to resume later. */
+  requeued: number;
 }
 
 /**
@@ -54,7 +71,7 @@ export async function runTick(db: JobsDb, opts: RunTickOptions): Promise<TickRes
     candidates.push({ row, kind: 'abandoned' });
   }
 
-  const result: TickResult = { claimed: 0, succeeded: 0, retrying: 0, failed: 0, skipped: 0 };
+  const result: TickResult = { claimed: 0, succeeded: 0, retrying: 0, failed: 0, skipped: 0, requeued: 0 };
   for (const { row, kind } of candidates.slice(0, max)) {
     const claimed = await claim(db, row, kind, opts);
     if (!claimed) {
@@ -66,6 +83,7 @@ export async function runTick(db: JobsDb, opts: RunTickOptions): Promise<TickRes
     // 'lost' = the lease was reclaimed mid-run by another tick; count it as
     // skipped (the new owner is responsible for the job now).
     if (outcome === 'lost') result.skipped += 1;
+    else if (outcome === 'requeued') result.requeued += 1;
     else result[outcome] += 1;
   }
   return result;
@@ -94,7 +112,7 @@ async function claim(
   return db.claimJob(row.id, kind, nowIso, patch);
 }
 
-type Outcome = 'succeeded' | 'retrying' | 'failed' | 'lost';
+type Outcome = 'succeeded' | 'retrying' | 'failed' | 'lost' | 'requeued';
 
 /** Thrown when an owner-guarded write finds the lease has been reclaimed. */
 class LeaseLost extends Error {
@@ -148,6 +166,7 @@ async function runJob(db: JobsDb, job: JobRow, opts: RunTickOptions): Promise<Ou
   });
   await owned({ phases, audit_events: audit, progress_version: ++version });
 
+  let processedThisTick = 0;
   try {
     for (let i = 0; i < phases.length; i++) {
       if (phases[i].state === 'succeeded') continue;
@@ -156,9 +175,43 @@ async function runJob(db: JobsDb, job: JobRow, opts: RunTickOptions): Promise<Ou
 
       await sleep(opts.phaseDelayMs ?? 0);
       maybeFail(phases[i].key, simulate, attempt);
+      // Real per-phase work (viability path); no-op for simulated/seeded jobs. May
+      // throw a JobError → handled by the same retry/terminal path below.
+      if (opts.executePhase) await opts.executePhase({ job, phaseKey: phases[i].key, attempt });
 
       phases[i] = { ...phases[i], state: 'succeeded', completed_at: isoSeconds(opts.clock.now()) };
       await owned({ phases: [...phases], progress_version: ++version });
+      processedThisTick += 1;
+
+      // Bounded work per invocation: if we've hit the budget and phases remain,
+      // requeue (due immediately) so the next tick resumes from the persisted
+      // phases — proving cross-invocation resume via next_run_at.
+      if (opts.maxPhasesPerTick && processedThisTick >= opts.maxPhasesPerTick) {
+        const remain = phases.some((p) => p.state !== 'succeeded');
+        if (remain) {
+          const at = isoSeconds(opts.clock.now());
+          audit = append(audit, {
+            at,
+            kind: 'requeued',
+            summary: `Tick budget reached after ${processedThisTick} phase(s); requeued to resume.`,
+          });
+          await owned({
+            state: 'queued',
+            phases: [...phases],
+            audit_events: audit,
+            progress_version: ++version,
+            next_run_at: at,
+            lease_expires_at: LEASE_FREE,
+            locked_by: null,
+            // A budget requeue is a *continuation*, not a new attempt. claim()
+            // increments attempt_count on the next tick, so roll it back by one
+            // here — otherwise chunking burns the retry budget and a later
+            // retryable failure would be treated as terminal.
+            attempt_count: attempt - 1,
+          });
+          return 'requeued';
+        }
+      }
     }
   } catch (err) {
     if (err instanceof LeaseLost) throw err; // bubble to processJob → 'lost'
