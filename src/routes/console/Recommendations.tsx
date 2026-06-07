@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon } from '../../components/Icon';
 import { Segmented } from '../../components/console/Segmented';
 import { ConfirmDialog, Drawer } from '../../components/console/overlays';
@@ -58,26 +58,38 @@ export function Recommendations() {
   // Explicit-approval confirm for code_pr generation (Task 8).
   const [gen, setGen] = useState<{ rec: RecommendationCard; step: RecommendationStep } | null>(null);
   const [submittingKey, setSubmittingKey] = useState<string | null>(null);
+  // Synchronous in-flight guard: setSubmittingKey is async, so two rapid confirm
+  // clicks could both pass the state check before a re-render — the ref blocks that.
+  const inFlight = useRef<Set<string>>(new Set());
   const runGenerate = useCallback(
     async (rec: RecommendationCard, step: RecommendationStep) => {
       const key = `${rec.id}:${step.key}`;
+      if (inFlight.current.has(key)) return;
+      inFlight.current.add(key);
+      // The step kind selects the approval action: a code_pr step opens a GitHub
+      // PR; a datadog_new_monitor step creates a draft Datadog monitor.
+      const isMonitor = step.kind === 'datadog_new_monitor';
+      const actionType = isMonitor ? 'create_monitor' : 'generate_pr';
       setSubmittingKey(key);
       try {
         const res = await approveAndGenerate({
           targetType: 'recommendation',
           targetId: rec.id,
           targetStepKey: step.key,
-          actionType: 'generate_pr',
-          approvalSummary: `Generate an instrumentation PR for "${rec.title}".`,
-          payload: { recommendation_id: rec.id, step_key: step.key, action: 'generate_pr' },
+          actionType,
+          approvalSummary: isMonitor
+            ? `Create a draft Datadog monitor for "${rec.title}".`
+            : `Generate an instrumentation PR for "${rec.title}".`,
+          payload: { recommendation_id: rec.id, step_key: step.key, action: actionType },
         });
         if (res.ok) {
-          notice.show('Generating the pull request…');
+          notice.show(isMonitor ? 'Creating the draft monitor…' : 'Generating the pull request…');
           await view.refetch();
         } else {
-          notice.show(res.error ?? 'PR generation could not be started.');
+          notice.show(res.error ?? (isMonitor ? 'Monitor creation could not be started.' : 'PR generation could not be started.'));
         }
       } finally {
+        inFlight.current.delete(key);
         setSubmittingKey(null);
       }
     },
@@ -143,26 +155,46 @@ export function Recommendations() {
         <StepArtifactDrawer state={drawer} onClose={() => setDrawer(null)} onFire={fire} />
       )}
 
-      {gen && (
-        <ConfirmDialog
-          icon="pr"
-          title="Generate this pull request?"
-          confirmLabel="Approve & generate"
-          confirmIcon="pr"
-          onConfirm={() => {
-            const g = gen;
-            setGen(null);
-            void runGenerate(g.rec, g.step);
-          }}
-          onCancel={() => setGen(null)}
-          body={
-            <span>
-              Instrument opens a branch, commits the instrumentation change, and opens a pull request on
-              GitHub for your review. Nothing is merged automatically.
-            </span>
-          }
-        />
-      )}
+      {gen &&
+        (gen.step.kind === 'datadog_new_monitor' ? (
+          <ConfirmDialog
+            icon="bell"
+            title="Create this draft monitor?"
+            confirmLabel="Approve & create"
+            confirmIcon="bell"
+            onConfirm={() => {
+              const g = gen;
+              setGen(null);
+              void runGenerate(g.rec, g.step);
+            }}
+            onCancel={() => setGen(null)}
+            body={
+              <span>
+                Instrument creates a <strong>draft</strong> Datadog monitor for your review. It has no
+                notification routing and will not page anyone until you publish it.
+              </span>
+            }
+          />
+        ) : (
+          <ConfirmDialog
+            icon="pr"
+            title="Generate this pull request?"
+            confirmLabel="Approve & generate"
+            confirmIcon="pr"
+            onConfirm={() => {
+              const g = gen;
+              setGen(null);
+              void runGenerate(g.rec, g.step);
+            }}
+            onCancel={() => setGen(null)}
+            body={
+              <span>
+                Instrument opens a branch, commits the instrumentation change, and opens a pull request on
+                GitHub for your review. Nothing is merged automatically.
+              </span>
+            }
+          />
+        ))}
 
       {notice.notice && <Toast key={notice.key} message={notice.notice} onDone={notice.clear} />}
     </div>
@@ -472,6 +504,25 @@ function StepAction({
       </button>
     );
   }
+  if (step.kind === 'datadog_new_monitor') {
+    const isSubmitting = submittingKey === `${rec.id}:${step.key}`;
+    return (
+      <button type="button" className="btn btn-primary btn-sm" onClick={() => onGenerate(rec, step)} disabled={isSubmitting}>
+        {isSubmitting ? (
+          <>
+            <span className="btn-spin" />
+            Starting…
+          </>
+        ) : (
+          <>
+            <Icon name="bell" />
+            Create draft
+          </>
+        )}
+      </button>
+    );
+  }
+  // datadog_monitor_change and any other kinds remain deferred (no executor yet).
   return (
     <button type="button" className="btn btn-primary btn-sm" onClick={() => onFire('create_datadog_monitor')}>
       <Icon name="bell" />

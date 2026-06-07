@@ -9,11 +9,13 @@ import { makeInvestigationExecutor, type PhaseExecutor } from '../../lib/agent.t
 import { makePrReviewExecutor } from '../../lib/agent-pr.ts';
 import { makeScanExecutor } from '../../lib/agent-scan.ts';
 import { makePrGenExecutor } from '../../lib/agent-prgen.ts';
+import { makeDdAlertExecutor } from '../../lib/agent-ddalert.ts';
 import { createGateway, createScriptedToolHost, createWorkStore } from './agent-runtime.ts';
 import { createAgentInvoker, createModelCallStore } from './model-call-store.ts';
 import { createPrMcp, createPrReviewStore } from './pr-review-store.ts';
 import { createScanMcp, createScanStore } from './scan-store.ts';
 import { createPrGenMcp, createPrGenStore } from './prgen-store.ts';
+import { createDdAlertMcp, createDdAlertStore } from './ddalert-store.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Admin = any;
@@ -42,10 +44,15 @@ export function buildExecutePhase(admin: Admin): PhaseExecutor {
     mcp: createPrGenMcp(admin),
     store: createPrGenStore(admin),
   });
+  const ddAlert = makeDdAlertExecutor({
+    mcp: createDdAlertMcp(admin),
+    store: createDdAlertStore(admin),
+  });
   return (ctx) => {
     if (ctx.job.job_type === 'github_pr_review_analysis') return prReview(ctx);
     if (ctx.job.job_type === 'proactive_scan') return scan(ctx);
     if (ctx.job.job_type === 'recommendation_pr_generation') return prGen(ctx);
+    if (ctx.job.job_type === 'datadog_alert_generation') return ddAlert(ctx);
     return investigation(ctx);
   };
 }

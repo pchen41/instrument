@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 const fx = vi.hoisted(() => {
@@ -57,6 +57,14 @@ const fx = vi.hoisted(() => {
         { key: 'generate-pr', order: 0, kind: 'code_pr', state: 'available', label: 'Generate instrumentation PR', target_provider: 'github' },
       ],
     }),
+    card({
+      id: 'rec-alert',
+      title: 'Alert when instrument.job.retry is elevated',
+      category: 'alert',
+      steps: [
+        { key: 'create-monitor', order: 0, kind: 'datadog_new_monitor', state: 'available', label: 'Create draft monitor', target_provider: 'datadog' },
+      ],
+    }),
   ];
   const archive = [
     card({ id: 'rec-acc', state: 'accepted', title: 'Accepted metric', category: 'instrumentation', steps: [] }),
@@ -84,6 +92,8 @@ vi.mock('../../data/actions', () => ({
 
 import { Recommendations } from './Recommendations';
 import { approveAndGenerate, setRecommendationState } from '../../data/actions';
+
+beforeEach(() => vi.clearAllMocks());
 
 describe('Recommendations — step locking + generated artifacts', () => {
   it('locks a dependent step until its prerequisite merges', () => {
@@ -119,6 +129,21 @@ describe('Recommendations — step locking + generated artifacts', () => {
         targetId: 'rec-instr',
         targetStepKey: 'generate-pr',
         actionType: 'generate_pr',
+      }),
+    );
+  });
+
+  it('runs the approval + create flow for a datadog_new_monitor step after explicit confirm', () => {
+    render(<Recommendations />);
+    fireEvent.click(screen.getByRole('button', { name: /Create draft/ }));
+    expect(approveAndGenerate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Approve & create/ }));
+    expect(approveAndGenerate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetType: 'recommendation',
+        targetId: 'rec-alert',
+        targetStepKey: 'create-monitor',
+        actionType: 'create_monitor',
       }),
     );
   });

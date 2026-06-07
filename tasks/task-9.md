@@ -2,7 +2,35 @@
 
 ## Status
 
-Not started.
+Slice 1 (approved draft-alert creation) **done + live-proven** (2026-06-07); slice 2
+(monitor analysis — auto-generating alert recommendations) **remaining**.
+
+The `datadog_alert_generation` executor creates a DRAFT (non-notifying) Datadog monitor
+from an approved `alert` recommendation, mirroring the Task 8 approval-gated PR pattern.
+Reviewed by Gemini + Codex (HIGH/MED/cheap-LOW applied; Claude's run failed to return).
+
+- Files: `server/lib/datadog-alert.ts` (spec schema + metric-verification rule + draft
+  payload), `server/lib/agent-ddalert.ts` (executor: inspect → draft_monitor → validate),
+  `server/functions/_shared/ddalert-store.ts` (datadog MCP adapter + persistence), wired
+  in `executors.ts`. Frontend "Create draft" button wired in `Recommendations.tsx`.
+- Live e2e: drove request_approval (`create_monitor`) → decide_approval → enqueue as the
+  demo user; job succeeded on attempt 1, step → `ready`,
+  `metric_verification_state=verified_in_datadog`, generated_monitor linked a real draft
+  monitor (us5, id 20351331), recovered via the marker tag (no duplicate). Monitor is
+  non-notifying (no @-mentions). Metric-verification GATE proven to refuse unverified.
+- Datadog MCP shapes (live): `create_datadog_monitor` returns
+  `{"response":{"monitor":{"id":...}}}` (no url → built from site); `search_datadog_metrics`
+  → JSON array of names (name_filter); `search_datadog_monitors` query `tag:"<marker>"`
+  → JSON array (index-lagged right after create); all tools take a required (empty-OK)
+  `telemetry` object.
+
+### Remaining (slice 2)
+
+Auto-generate `alert` recommendations within the existing scan/`recommendation_generation`
+flow (NOT a new job type): read monitors/metrics/coverage, distinguish new-monitor vs
+existing-monitor-improvement (latter = read-only diff), set each metric's verification
+state, and write the monitor spec into the step's `proposed_payload` (which slice 1
+consumes). The slice-1 demo rec was hand-seeded to exercise the generation path.
 
 ## Context
 
