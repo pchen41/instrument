@@ -2,7 +2,14 @@
 
 ## Status
 
-Not started.
+Complete (2026-06-06). Five migrations applied cleanly to the linked InsForge
+project (`instrument`, app `m5h8zr7r`): 15 enums, 15 core tables with all
+required unique / partial-unique indexes, RLS (member-select + service-only
+writes via a non-recursive `private.is_workspace_member` helper), and seed data
+for one workspace, the owner membership, the primary repo `pchen41/instrument`,
+and GitHub/Datadog/TrueFoundry integrations (non-secret config + `secret_ref`
+names only). Automated schema/constraint verification (`npm run verify:db`) and a
+real-JWT RLS behavioral test (`npm run verify:rls`) both pass.
 
 ## Context
 
@@ -155,5 +162,57 @@ Depends on Task 0.
 
 ## Progress Notes
 
-- Update this section with migration names, CLI output summaries, seed data
-  notes, and any RLS exceptions.
+- 2026-06-06 — Implemented via `npx @insforge/cli db migrations`. Files under
+  `migrations/`:
+  - `20260607011857_create-enums.sql` — the 15 first-slice enums.
+  - `20260607011858_create-core-tables.sql` — the 15 core tables in FK order;
+    `workspaces.primary_repository_id` created nullable with the FK added after
+    `repositories` exists; unique + partial-unique indexes
+    (`jobs_workspace_type_idempotency_key`,
+    `inbound_webhooks_provider_delivery_key`, `pr_review_comments_revision_unique`,
+    partial `pr_review_comments_posted_semantic_unique` where `status='posted'`,
+    partial `incidents_active_correlation_unique` where `incident_state='active'`,
+    `external_write_actions_idempotency_key`, `telemetry_emissions_idempotency_key`,
+    and `approvals_active_unique` which **excludes** `idempotency_key`); recommended
+    list/lookup indexes; `system.update_updated_at()` triggers on the 7 row-managed
+    tables. No folded/retired tables created.
+  - `20260607011859_enable-rls-and-policies.sql` — `private.is_workspace_member`
+    (`security definer`, `set search_path=''`, queries `public.workspace_members`);
+    RLS enabled on all 15 tables; member `select` policies (`workspaces` checks
+    `id`, others check `workspace_id`); `workspace_members` self-only policy
+    (`user_id = (select auth.uid())`, no helper → no recursion); narrow
+    `workspaces` settings-only `update` policy.
+  - `20260607012645_harden-write-grants.sql` — **RLS exception worth noting:**
+    InsForge auto-grants full table privileges to `anon`/`authenticated` on every
+    public table, so RLS alone was the only write gate and the "narrow" workspaces
+    update was not actually column-limited. This migration `revoke`s
+    insert/update/delete from both roles on all 15 tables, then re-grants only the
+    `workspaces` settings-column `update` to `authenticated`. Server code uses
+    admin/service credentials and bypasses these grants.
+  - `20260607011900_seed-first-slice.sql` — idempotent `do` block (skips if the
+    `instrument` workspace exists); resolves the demo user by email
+    (`test@test.com` → must exist in `auth.users`); seeds workspace + settings,
+    owner membership, GitHub/Datadog/TrueFoundry integrations (status `connected`;
+    `secret_ref` = `GITHUB_TOKEN` / `DATADOG_API_KEY` / `TRUEFOUNDRY_PAT`; Datadog
+    site `us5`, TrueFoundry MCP FQNs/URLs/allowlists in `config`), and the primary
+    repo `pchen41/instrument`, then sets `workspaces.primary_repository_id`.
+- Tests:
+  - `db/verify.sql` + `npm run verify:db` (`scripts/verify-db.mjs`): asserts the
+    15 enums, 15 tables, RLS-enabled, required indexes, folded tables absent,
+    member-select-only policy shape, the revoked write grants + narrow workspaces
+    column grant, seed presence, no raw secrets in `secret_ref`, and the
+    duplicate-insert behavior for jobs / external_write_actions /
+    telemetry_emissions / pr_review_comments (revision + posted-semantic, plus the
+    allowed non-posted duplicate) / active incident correlation / active approval
+    uniqueness (including a second active approval with a *different*
+    idempotency key, which must still be rejected). Runs as `project_admin`; all
+    test inserts roll back via a sentinel `raise`. **Passes.**
+  - `npm run verify:rls` (`scripts/verify-rls.mjs`): real-JWT `@insforge/sdk`
+    test — a signed-in member reads their workspace/integrations and only their own
+    `workspace_members` row, cannot insert a job or external write action, can
+    update `investigation_start_mode` but not `slug`, and an anonymous (non-member)
+    client reads nothing. Needs `INSTRUMENT_DEMO_PASSWORD` at run time (kept out of
+    git; see `docs/CONFIG.md`); skips cleanly if unset. **Passes.**
+  - `db query` cannot `set role` / `set_config` / use transaction control, so
+    row-level member-vs-non-member visibility is proven by the SDK test rather than
+    by impersonation in SQL.

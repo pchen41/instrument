@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:db": "node scripts/verify-db.mjs",
+    "verify:rls": "node scripts/verify-rls.mjs"
   },
   "dependencies": {
     "@datadog/browser-rum": "^5.23.3",
