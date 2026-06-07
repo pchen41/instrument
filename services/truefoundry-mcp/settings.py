@@ -33,6 +33,7 @@ class Settings:
     tfy_base_url: str
     tfy_api_token: str | None
     tfy_data_routing_destination: str | None
+    tfy_tracing_project_fqn: str | None
     mcp_auth_token: str | None
     allow_unauthenticated_mcp: bool
     max_time_window_hours: int
@@ -60,6 +61,7 @@ def load_settings() -> Settings:
         tfy_base_url=os.getenv("TFY_BASE_URL", "https://gateway.truefoundry.ai").rstrip("/"),
         tfy_api_token=os.getenv("TFY_API_TOKEN"),
         tfy_data_routing_destination=os.getenv("TFY_DATA_ROUTING_DESTINATION"),
+        tfy_tracing_project_fqn=os.getenv("TFY_TRACING_PROJECT_FQN"),
         mcp_auth_token=os.getenv("MCP_AUTH_TOKEN"),
         allow_unauthenticated_mcp=_bool_env("ALLOW_UNAUTHENTICATED_MCP", False),
         max_time_window_hours=_int_env("MAX_TIME_WINDOW_HOURS", 6),

@@ -13,6 +13,8 @@ services:
         sync: false
       - key: TFY_DATA_ROUTING_DESTINATION
         sync: false
+      - key: TFY_TRACING_PROJECT_FQN
+        sync: false
       - key: MCP_AUTH_TOKEN
         sync: false
       - key: MCP_ALLOWED_HOSTS

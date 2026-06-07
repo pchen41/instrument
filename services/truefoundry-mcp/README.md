@@ -25,6 +25,8 @@ Set these in Render. Record secret names only in task notes, never values.
 - `TFY_BASE_URL` - defaults to `https://gateway.truefoundry.ai`.
 - `TFY_API_TOKEN` - TrueFoundry API token or VAT for server-side API calls.
 - `TFY_DATA_ROUTING_DESTINATION` - optional TrueFoundry routing header value.
+- `TFY_TRACING_PROJECT_FQN` - tracing project FQN for request log/span queries,
+  for example `<tenant>:tracing-project:tfy-default`.
 - `MCP_AUTH_TOKEN` - shared bearer/header token for the demo MCP endpoint.
 - `MCP_ALLOWED_HOSTS` - comma-separated host headers accepted by the MCP SDK's
   DNS rebinding protection. For the current Render service, set

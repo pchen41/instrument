@@ -31,10 +31,12 @@ def register_tools(mcp: FastMCP, settings: Settings) -> None:
     async def query_truefoundry_model_metrics(
         start_time: str,
         end_time: str,
-        metric_names: list[str] | None = None,
-        filters: dict[str, Any] | None = None,
+        query_type: str = "distribution",
+        aggregations: list[dict[str, str]] | None = None,
+        filters: list[dict[str, Any]] | None = None,
         group_by: list[str] | None = None,
         limit: int | None = None,
+        interval_in_seconds: int | None = None,
     ) -> dict[str, Any]:
         """Query bounded TrueFoundry model metrics for a short time window."""
         payload = build_metrics_payload(
@@ -43,10 +45,12 @@ def register_tools(mcp: FastMCP, settings: Settings) -> None:
             end_time=end_time,
             max_hours=settings.max_time_window_hours,
             max_limit=settings.max_result_limit,
-            metric_names=metric_names,
+            query_type=query_type,
+            aggregations=aggregations,
             filters=filters,
             group_by=group_by,
             limit=limit,
+            interval_in_seconds=interval_in_seconds,
         )
         data = await client.query_metrics(payload)
         return {"query": redact(payload), "result": redact(data)}
@@ -55,10 +59,12 @@ def register_tools(mcp: FastMCP, settings: Settings) -> None:
     async def query_truefoundry_mcp_metrics(
         start_time: str,
         end_time: str,
-        metric_names: list[str] | None = None,
-        filters: dict[str, Any] | None = None,
+        query_type: str = "distribution",
+        aggregations: list[dict[str, str]] | None = None,
+        filters: list[dict[str, Any]] | None = None,
         group_by: list[str] | None = None,
         limit: int | None = None,
+        interval_in_seconds: int | None = None,
     ) -> dict[str, Any]:
         """Query bounded TrueFoundry MCP metrics for a short time window."""
         payload = build_metrics_payload(
@@ -67,10 +73,12 @@ def register_tools(mcp: FastMCP, settings: Settings) -> None:
             end_time=end_time,
             max_hours=settings.max_time_window_hours,
             max_limit=settings.max_result_limit,
-            metric_names=metric_names,
+            query_type=query_type,
+            aggregations=aggregations,
             filters=filters,
             group_by=group_by,
             limit=limit,
+            interval_in_seconds=interval_in_seconds,
         )
         data = await client.query_metrics(payload)
         return {"query": redact(payload), "result": redact(data)}
@@ -89,6 +97,8 @@ def register_tools(mcp: FastMCP, settings: Settings) -> None:
             end_time=end_time,
             max_hours=settings.max_time_window_hours,
             max_limit=settings.max_result_limit,
+            tracing_project_fqn=settings.tfy_tracing_project_fqn,
+            data_routing_destination=settings.tfy_data_routing_destination,
             query=query,
             filters=filters,
             limit=limit,
@@ -109,6 +119,8 @@ def register_tools(mcp: FastMCP, settings: Settings) -> None:
             end_time=end_time,
             max_hours=settings.max_time_window_hours,
             max_limit=settings.max_result_limit,
+            tracing_project_fqn=settings.tfy_tracing_project_fqn,
+            data_routing_destination=settings.tfy_data_routing_destination,
             trace_id=trace_id,
             limit=limit,
         )

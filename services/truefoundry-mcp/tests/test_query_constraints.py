@@ -16,21 +16,33 @@ class QueryConstraintTests(unittest.TestCase):
 
     def test_metrics_payload_bounds_window_and_filters(self):
         payload = build_metrics_payload(
-            datasource="modelMetrics",
+            datasource="mcpMetrics",
             start_time="2026-06-06T10:00:00Z",
             end_time="2026-06-06T11:00:00Z",
             max_hours=6,
             max_limit=50,
-            metric_names=["latency", "cost"],
-            filters={"model": "instrument/instrument"},
-            group_by=["model"],
+            aggregations=[
+                {"type": "count", "column": "method"},
+                {"type": "p99", "column": "latencyMs"},
+            ],
+            filters=[{"fieldName": "method", "operator": "IN", "value": ["tools/list"]}],
+            group_by=["method"],
             limit=10,
         )
 
-        self.assertEqual(payload["datasource"], "modelMetrics")
+        self.assertEqual(payload["datasource"], "mcpMetrics")
+        self.assertEqual(payload["type"], "distribution")
+        self.assertEqual(payload["startTs"], "2026-06-06T10:00:00Z")
         self.assertEqual(payload["limit"], 10)
-        self.assertEqual(payload["filters"], {"model": "instrument/instrument"})
-        self.assertEqual(payload["groupBy"], ["model"])
+        self.assertEqual(
+            payload["aggregations"],
+            [
+                {"type": "count", "column": "method"},
+                {"type": "p99", "column": "latencyMs"},
+            ],
+        )
+        self.assertEqual(payload["filters"], [{"fieldName": "method", "operator": "IN", "value": ["tools/list"]}])
+        self.assertEqual(payload["groupBy"], ["method"])
 
     def test_rejects_overlong_window(self):
         with self.assertRaises(ValueError):
@@ -46,17 +58,58 @@ class QueryConstraintTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             clean_filters({"authorization": "nope"})
 
+    def test_model_metrics_allow_model_columns(self):
+        payload = build_metrics_payload(
+            datasource="modelMetrics",
+            start_time="2026-06-06T10:00:00Z",
+            end_time="2026-06-06T11:00:00Z",
+            max_hours=6,
+            max_limit=50,
+            aggregations=[
+                {"type": "count", "column": "modelName"},
+                {"type": "sum", "column": "inputTokens"},
+                {"type": "p99", "column": "latencyMs"},
+            ],
+            filters=[{"fieldName": "virtualModelName", "operator": "IS_NULL", "value": True}],
+            group_by=["modelName"],
+        )
+
+        self.assertEqual(payload["datasource"], "modelMetrics")
+        self.assertEqual(payload["groupBy"], ["modelName"])
+        self.assertEqual(payload["filters"], [{"fieldName": "virtualModelName", "operator": "IS_NULL", "value": True}])
+
+    def test_timeseries_payload_adds_interval(self):
+        payload = build_metrics_payload(
+            datasource="mcpMetrics",
+            start_time="2026-06-06T10:00:00Z",
+            end_time="2026-06-06T11:00:00Z",
+            max_hours=6,
+            max_limit=50,
+            query_type="timeseries",
+            aggregations=[{"type": "count", "column": "toolName"}],
+            group_by=["toolName"],
+            interval_in_seconds=300,
+        )
+
+        self.assertEqual(payload["type"], "timeseries")
+        self.assertEqual(payload["intervalInSeconds"], 300)
+
     def test_spans_payload_adds_trace_id_filter(self):
         payload = build_spans_payload(
             start_time="2026-06-06T10:00:00Z",
             end_time="2026-06-06T10:30:00Z",
             max_hours=6,
             max_limit=50,
+            tracing_project_fqn="tenant:tracing-project:tfy-default",
+            data_routing_destination="default",
             trace_id="trace-123",
             limit=5,
         )
 
-        self.assertEqual(payload["filters"]["trace_id"], "trace-123")
+        self.assertEqual(payload["tracingProjectFqn"], "tenant:tracing-project:tfy-default")
+        self.assertEqual(payload["dataRoutingDestination"], "default")
+        self.assertEqual(payload["applicationNames"], ["tfy-llm-gateway"])
+        self.assertEqual(payload["filters"], [{"spanFieldName": "traceId", "operator": "IN", "value": ["trace-123"]}])
         self.assertEqual(payload["limit"], 5)
 
 
