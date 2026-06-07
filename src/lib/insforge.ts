@@ -19,3 +19,8 @@ if (import.meta.env.DEV && (!baseUrl || !anonKey)) {
 }
 
 export const insforge = createClient({ baseUrl, anonKey });
+
+// Exposed for the auth layer's cross-domain session restore (the SPA and the API
+// are on different domains, so the cookie refresh flow can't be used).
+export const insforgeUrl = baseUrl;
+export const insforgeAnonKey = anonKey;

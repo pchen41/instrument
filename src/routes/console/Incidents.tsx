@@ -5,7 +5,7 @@ import { Activity, AutoBadge, Pill, RULE_COLOR } from '../../components/console/
 import { Segmented } from '../../components/console/Segmented';
 import { ConfirmDialog } from '../../components/console/overlays';
 import { ErrorState, LoadingState, Toast, useTransientNotice } from '../../components/console/feedback';
-import { useChangeFlash, useIncidentsView, useWorkspaceSettings } from '../../data/hooks';
+import { useIncidentsView, useWorkspaceSettings } from '../../data/hooks';
 import { updateInvestigationStartMode, type IncidentWithState, type InvestigationStartMode } from '../../data/reads';
 import { runDeferredAction } from '../../data/deferred';
 import { useAuth } from '../../auth/AuthProvider';
@@ -26,11 +26,9 @@ import { AutoInvestigateMenu } from './AutoInvestigateMenu';
 export function Incidents() {
   const [scope, setScope] = useState<'active' | 'resolved'>('active');
   const view = useIncidentsView(scope);
-  const flash = useChangeFlash(view.lastUpdatedAt);
   const notice = useTransientNotice();
 
   const rows = view.data ?? [];
-  const investigating = rows.some((r) => r.display === 'investigating');
 
   const investigate = useCallback(
     () => notice.show(runDeferredAction('start_investigation').message),
@@ -48,12 +46,6 @@ export function Incidents() {
         </div>
         <div className="head-controls">
           <StartModeControl />
-          {investigating && (
-            <span className={'live-pill' + (flash ? ' flash' : '')} aria-live="polite">
-              <span className="dot" />
-              {flash ? 'Updated' : 'Live'}
-            </span>
-          )}
           <Segmented
             ariaLabel="Incident filter"
             value={scope}

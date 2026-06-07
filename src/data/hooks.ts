@@ -148,33 +148,16 @@ export function usePolling<T>(loader: () => Promise<{ data: T; error: unknown }>
   return { data, error, loading, refreshing, lastUpdatedAt, refetch };
 }
 
-/**
- * Briefly returns true after `value` changes, then debounces back to false.
- * Used for the quiet "Updated" flash so rapid poll cycles don't thrash the UI.
- */
-export function useChangeFlash(value: number | null, ms = 1600): boolean {
-  const [flash, setFlash] = useState(false);
-  const prev = useRef(value);
-  useEffect(() => {
-    if (value !== null && prev.current !== null && value !== prev.current) {
-      setFlash(true);
-      const t = setTimeout(() => setFlash(false), ms);
-      prev.current = value;
-      return () => clearTimeout(t);
-    }
-    prev.current = value;
-  }, [value, ms]);
-  return flash;
-}
-
 // ---- View hooks -------------------------------------------------------------
 
-const anyInvestigating = (rows: IncidentWithState[]) => rows.some((r) => r.display === 'investigating');
+// The list views poll continuously so new incidents / recommendations created in
+// the background (alerts, proactive scans) appear without a manual refresh.
+const ALWAYS_ACTIVE = () => true;
 
-/** Active or resolved incidents joined to investigation job state; polls while any is investigating. */
+/** Active or resolved incidents joined to investigation job state; polls for new items. */
 export function useIncidentsView(scope: 'active' | 'resolved', client: Client = insforge) {
   const loader = useCallback(() => loadIncidentsView(scope, client), [scope, client]);
-  return usePolling<IncidentWithState[]>(loader, { isActive: anyInvestigating, resetKey: scope });
+  return usePolling<IncidentWithState[]>(loader, { isActive: ALWAYS_ACTIVE, resetKey: scope });
 }
 
 export interface IncidentDetailData {
@@ -192,16 +175,13 @@ export function useIncidentDetail(id: string, client: Client = insforge) {
   });
 }
 
-const anyGenerating = (rows: RecommendationCard[]) =>
-  rows.some((r) => (r.steps ?? []).some((s) => s.state === 'generating'));
-
-/** Active (Open) or archived recommendations with steps; polls while a step is generating. */
+/** Active (Open) or archived recommendations with steps; polls for new items + step updates. */
 export function useRecommendationsView(scope: 'active' | 'archive', client: Client = insforge) {
   const loader = useCallback(
     () => (scope === 'active' ? loadActiveRecommendations(client) : loadArchivedRecommendations(client)),
     [scope, client],
   );
-  return usePolling<RecommendationCard[]>(loader, { isActive: anyGenerating, resetKey: scope });
+  return usePolling<RecommendationCard[]>(loader, { isActive: ALWAYS_ACTIVE, resetKey: scope });
 }
 
 /** Integration health. Loaded once and refetched on focus; not polled. */

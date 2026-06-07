@@ -218,7 +218,6 @@ function Investigation({ data, fire }: { data: IncidentDetailData; fire: (a: Def
                       )}
                     </div>
                     <div className="ev-summary">{e.summary}</div>
-                    <div className="ev-verif">{e.verification_state}</div>
                   </div>
                 </div>
               ))}

@@ -396,12 +396,6 @@ button{font-family:inherit;cursor:pointer;}
 .load-state{display:flex;align-items:center;justify-content:center;gap:11px;padding:56px 20px;color:var(--ink-3);font-size:14px;}
 .empty .ei.err{background:var(--warn-tint);color:var(--warn);}
 
-/* Live / updated indicators on a list while work is in flight. */
-.live-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--info-ink);background:var(--info-tint);padding:3px 10px 3px 8px;border-radius:var(--r-pill);white-space:nowrap;}
-.live-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--info);}
-.live-pill.flash{color:var(--ok-ink);background:var(--ok-tint);}
-.live-pill.flash .dot{background:var(--ok);}
-
 /* Failed-investigation card: preserved progress + affected source + retry. */
 .job-failed{margin-top:16px;padding:16px 18px;border-radius:var(--r-md);background:var(--crit-tint);border:1px solid var(--crit-100,rgba(201,42,42,.18));}
 .job-failed .jf-head{display:flex;align-items:flex-start;gap:12px;}
@@ -416,18 +410,10 @@ button{font-family:inherit;cursor:pointer;}
 .job-failed .jf-actions{display:flex;align-items:center;gap:10px;margin-top:14px;}
 .job-failed .jf-noretry{font-size:12.5px;color:var(--ink-3);}
 
-/* Integration health card states (connected / degraded / disconnected /
-   rate_limited / missing_credentials). */
-.intg{flex-wrap:wrap;}
+/* Integration card "set up" status pill. */
 .intg .istatus{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;padding:4px 11px 4px 9px;border-radius:var(--r-pill);white-space:nowrap;}
 .intg .istatus .dot{width:7px;height:7px;border-radius:50%;}
 .intg .istatus.ok{color:var(--ok-ink);background:var(--ok-tint);}.intg .istatus.ok .dot{background:var(--ok);}
-.intg .istatus.warn{color:var(--warn-ink);background:var(--warn-tint);}.intg .istatus.warn .dot{background:var(--warn);}
-.intg .istatus.crit{color:var(--crit-ink);background:var(--crit-tint);}.intg .istatus.crit .dot{background:var(--crit);}
-.intg .istatus.idle{color:var(--ink-3);background:var(--sunken);}.intg .istatus.idle .dot{background:var(--ink-4);}
-.intg .ierror{flex-basis:100%;margin-top:4px;display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--ink-3);line-height:1.5;}
-.intg .ierror i{font-size:14px;color:var(--warn);flex-shrink:0;margin-top:1px;}
-.intg .ierror .mono{font-family:var(--font-mono);}
 
 /* Generated-artifact link row inside a recommendation step / drawer. */
 .gen-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--brand-700);font-weight:600;}
@@ -456,4 +442,3 @@ button{font-family:inherit;cursor:pointer;}
 .ev-title a{color:inherit;text-decoration:none;border-bottom:1px solid var(--border-strong);}
 .ev-title a:hover{color:var(--brand-700);}
 .ev-summary{font-size:12.5px;color:var(--ink-3);margin-top:2px;line-height:1.45;}
-.ev-verif{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;color:var(--ink-4);}
