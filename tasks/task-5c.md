@@ -2,7 +2,17 @@
 
 ## Status
 
-In progress.
+Complete (2026-06-06). The shared TrueFoundry model-call helper surface, the
+structured-output schema-validation layer, and the non-secret MCP registry config
+are in place and tested; the Render-hosted observability MCP server is live and
+healthy, and GitHub/Datadog/instrument-investigation MCP servers are verified
+through the TrueFoundry MCP Gateway with explicit read/write tool allowlists
+recorded in `integrations.config`. The real Agent-API streamed tool-loop *invoker*
+(`agent_responses` with live GitHub/Datadog tool calls) is intentionally deferred
+to the provider workflow tasks (6/7/9/11/12) — `createAgentInvoker` throws for
+that surface rather than silently returning a tool-less result. The model-call
+helper itself is proven against faithful streamed fixtures (bounded
+`tool_calls_redacted` + cited `evidence_items`).
 
 ## Context
 
@@ -121,3 +131,74 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
   summary persistence, cited `evidence_items`, structured-output validation,
   GitHub/Datadog MCP verification, and writing non-secret MCP config into
   `integrations.config` once the app schema path is ready.
+- 2026-06-06: Built the shared app-side helper surface and verified the MCP
+  registry live. This closes the remaining 5C work above.
+
+  **Helper surface (downstream tasks 6/7/9/11/12 use these):**
+  - `server/lib/model-call.ts` — `runModelCall(deps, spec)`: the single entry
+    point for an AI call. Invokes the injected `AgentInvoker`, bounds streamed MCP
+    tool calls into `ai_model_calls.tool_calls_redacted` (`summarizeToolCalls`,
+    default caps 20 calls / 400 arg chars / 600 result chars), validates
+    structured output, persists ONE full `ai_model_calls` row (response/trace/span
+    ids, provider/model, `gateway_base_url_name`, `mcp_servers_requested`, usage,
+    `cost_usd`, `latency_ms`, schema versions, `input_hash`, `output_redacted`,
+    `validation_status`, and — on a gateway failure — a sanitized `status:failed`
+    row), then persists cited `evidence_items` linked via `ai_model_call_id`.
+    `api_surface` ∈ {`agent_chat_completions`, `agent_responses`}.
+  - `server/lib/schema-validation.ts` — `SchemaRegistry` (zod) keyed by
+    `output_schema_version`; `validate()` → `valid` | `invalid` |
+    `not_applicable`. Release gates: `assertValidForDisplay` blocks `invalid`;
+    `assertValidForExternalPosting` requires `valid` (rejects `invalid` AND
+    `not_applicable`, so nothing reaches a provider without a registered schema).
+    Task-specific schemas are registered by the workflow tasks that own them.
+  - `server/lib/mcp-config.ts` — read-vs-write tool-allowlist partitioning
+    (`KNOWN_WRITE_TOOLS` + mutating-prefix patterns), non-secret config builder,
+    and `findSecretLikeValues` leak guard.
+  - `server/functions/_shared/model-call-store.ts` — Deno IO edge:
+    `createModelCallStore(admin)` (PostgREST full-row writer; returns the id;
+    dedupes on the `(job_id, purpose)` unique index) and `createAgentInvoker()`
+    (wraps the streaming gateway for `agent_chat_completions`; throws for
+    `agent_responses` so the real tool loop is wired explicitly in provider tasks).
+  - Tests: `schema-validation.test.ts` (8), `model-call.test.ts` (9, covering a
+    non-tool fixture, a streamed tool-loop fixture, invalid-output rejection,
+    sanitized failure persistence, and dedup), `mcp-config.test.ts` (7). Full
+    suite 155 passing; `tsc` + function bundle green. The deployed 5B worker path
+    is untouched.
+
+  **Schema versions:** `request_schema_version` / `output_schema_version` are
+  free-form strings set per call; 5C ships the registry mechanism only. The
+  validation example used in tests is `incident_hypotheses.v1`; concrete
+  task-owned schemas land in Tasks 6/7/9/11/12.
+
+  **MCP registry verification (`scripts/verify-mcp.mjs`, live):** lists tools for
+  each server through the TrueFoundry MCP Gateway and writes the non-secret config
+  into `integrations.config`. Run dry by default; `--apply` to write. Reads the
+  TrueFoundry gateway PAT from env `TFY_GATEWAY_PAT` (never printed/committed) and
+  the InsForge admin key from `.insforge/project.json`. Verified 2026-06-06:
+  - Render observability MCP `/healthz` → HTTP 200 `status: ok` (health `healthy`).
+  - `github` MCP healthy: 44 tools (29 read / 15 write).
+  - `datadog` MCP healthy: 40 tools (35 read / 5 write, incl.
+    `create_datadog_monitor`).
+  - `instrument-investigation` (read-only virtual MCP) healthy: 62 tools, 0 write.
+  - Stored under `integrations.config`: per-server `server_url`, `read_only`,
+    `allowed_tools.{read,write}`, `health`, `tool_source`, `last_checked_at`. The
+    `truefoundry` row also carries `mcp_servers[]`, `observability_mcp`,
+    `gateway_base_url`, `control_plane_url`, and `api_endpoints`. `github` /
+    `datadog` rows carry a `mcp` block. All three integrations set to `connected`.
+  - Model reconciliation: `config.model` set to the working inference name
+    `instrument/instrument`; the prefixed `peterc:virtual-model:instrument/instrument`
+    (which 403s on inference) is kept only as `model_fqn`.
+  - A secret-leak guard runs before every write and a post-write scan confirmed no
+    PAT/JWT/bearer/API-key value is present in any stored config column.
+
+  **Secret names only (values never committed/printed):** `TRUEFOUNDRY_PAT`
+  (gateway PAT, `integrations.secret_ref`), `GITHUB_TOKEN`, `DATADOG_API_KEY`.
+  Render env (set in Render, names only): `TFY_CONTROL_PLANE_URL`,
+  `TFY_API_TOKEN`, `TFY_TRACING_PROJECT_FQN`, `MCP_AUTH_TOKEN`,
+  `MCP_ALLOWED_HOSTS`. See `docs/CONFIG.md` (gitignored) for values.
+
+  **Deferred by design (provider tasks, not a 5C gap):** the live Agent-API
+  streamed tool-loop invoker (`agent_responses`) that drives real GitHub/Datadog
+  MCP tool calls; production OAuth / token passthrough / automated MCP
+  registration. 5C proves the persistence + validation + governance surface those
+  tasks build on.

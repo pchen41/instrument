@@ -300,6 +300,6 @@ export function createWorkStore(admin: Admin): WorkStore {
 
 /** A Postgres unique-constraint violation surfaced through PostgREST. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isUniqueViolation(error: any): boolean {
+export function isUniqueViolation(error: any): boolean {
   return error?.code === '23505' || /duplicate key|unique constraint|already exists/i.test(String(error?.message ?? ''));
 }
