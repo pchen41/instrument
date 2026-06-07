@@ -4,6 +4,10 @@
 // intentionally un-instrumented — no metrics, no tracing — so it stands in for
 // the kind of hot-path code Instrument flags and offers to harden.
 
+import { trace, SpanStatusCode } from '@opentelemetry/api';
+
+const tracer = trace.getTracer('checkout');
+
 export interface CartItem {
   sku: string;
   quantity: number;
@@ -27,25 +31,37 @@ function totalCents(items: CartItem[]): number {
 }
 
 export async function checkout(req: CheckoutRequest): Promise<CheckoutResult> {
-  if (req.items.length === 0) {
-    throw new Error('cart is empty');
-  }
+  return tracer.startActiveSpan('checkout', async (span) => {
+    try {
+      if (req.items.length === 0) {
+        throw new Error('cart is empty');
+      }
 
-  const amount = totalCents(req.items);
+      const amount = totalCents(req.items);
 
-  const reservation = await reserveInventory(req.items);
-  if (!reservation.ok) {
-    return { orderId: '', totalCents: amount, status: 'declined' };
-  }
+      const reservation = await reserveInventory(req.items);
+      if (!reservation.ok) {
+        return { orderId: '', totalCents: amount, status: 'declined' };
+      }
 
-  const charge = await chargePayment(req.paymentToken, amount);
-  if (!charge.ok) {
-    await releaseInventory(reservation.holdId);
-    return { orderId: '', totalCents: amount, status: 'declined' };
-  }
+      const charge = await chargePayment(req.paymentToken, amount);
+      if (!charge.ok) {
+        await releaseInventory(reservation.holdId);
+        return { orderId: '', totalCents: amount, status: 'declined' };
+      }
 
-  const order = await persistOrder(req.userId, req.items, amount, charge.chargeId);
-  return { orderId: order.id, totalCents: amount, status: 'confirmed' };
+      const order = await persistOrder(req.userId, req.items, amount, charge.chargeId);
+      return { orderId: order.id, totalCents: amount, status: 'confirmed' };
+    } catch (error) {
+      if (error instanceof Error) {
+        span.recordException(error);
+      }
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      throw error;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 // --- collaborators (stubbed for the smoke module) --------------------------
