@@ -2,12 +2,18 @@
 
 ## Status
 
-Slice 1 (approved draft-alert creation) **done + live-proven** (2026-06-07); slice 2
-(monitor analysis — auto-generating alert recommendations) **remaining**.
+**Both slices done + live-proven (2026-06-07).**
 
-The `datadog_alert_generation` executor creates a DRAFT (non-notifying) Datadog monitor
-from an approved `alert` recommendation, mirroring the Task 8 approval-gated PR pattern.
-Reviewed by Gemini + Codex (HIGH/MED/cheap-LOW applied; Claude's run failed to return).
+- Slice 1 (approved draft-alert creation): the `datadog_alert_generation` executor
+  creates a DRAFT (non-notifying) Datadog monitor from an approved `alert`
+  recommendation, mirroring the Task 8 approval-gated PR pattern.
+- Slice 2 (monitor analysis): the `recommendation_generation` job auto-generates
+  `alert` recommendations from live Datadog metric/monitor coverage — the
+  primary-branch scan (Task 7) hands one off per push. New-monitor specs land in the
+  step's `proposed_payload` (which slice 1 consumes); existing-monitor improvements
+  render as read-only diffs (Instrument never mutates a monitor). Reviewed by Gemini
+  (HIGH/MED/LOW applied: locked→available transition, secret-scrub the model spec +
+  persisted findings, token-aware coverage match, parse the de-fenced body).
 
 - Files: `server/lib/datadog-alert.ts` (spec schema + metric-verification rule + draft
   payload), `server/lib/agent-ddalert.ts` (executor: inspect → draft_monitor → validate),
@@ -24,13 +30,37 @@ Reviewed by Gemini + Codex (HIGH/MED/cheap-LOW applied; Claude's run failed to r
   → JSON array (index-lagged right after create); all tools take a required (empty-OK)
   `telemetry` object.
 
-### Remaining (slice 2)
+### Slice 2 (done)
 
-Auto-generate `alert` recommendations within the existing scan/`recommendation_generation`
-flow (NOT a new job type): read monitors/metrics/coverage, distinguish new-monitor vs
-existing-monitor-improvement (latter = read-only diff), set each metric's verification
-state, and write the monitor spec into the step's `proposed_payload` (which slice 1
-consumes). The slice-1 demo rec was hand-seeded to exercise the generation path.
+- Files: `server/lib/alert-coverage.ts` (coverage detection + alert-findings schema +
+  the finding→recommendation rule with its gates + the analysis prompt),
+  `server/lib/agent-recgen.ts` (the `recommendation_generation` executor:
+  gather → draft → validate), `server/functions/_shared/recgen-store.ts` (datadog MCP
+  READ adapter + persistence + the category-`alert` upsert), wired in `executors.ts`.
+  The scan `rank()` enqueues one `recommendation_generation` job per push
+  (`enqueueAlertCoverage`, idempotent on `recgen:alert:<repo>:<sha>`).
+- Trust boundary: the MODEL proposes monitor specs + improvement diffs, but coverage
+  ("which metrics already have a monitor" — a metric is covered iff a monitor's query
+  references it, token-aware) and metric verification are computed deterministically
+  from the live reads. Gates: unverified metric → dropped (no creatable alert); covered
+  metric → dropped (no duplicate); improvement naming an unread monitor → dropped (no
+  phantom diff); expected_after_step → `locked` step, only when the scan found real
+  instrumentation gaps.
+- Live e2e (us5, namespace `instrument`): coverage read = 2 metrics / 1 monitor →
+  `instrument.job.retry` covered (slice-1 monitor 20351331), `instrument.job.error`
+  uncovered → generated ONE creatable `datadog_new_monitor` alert rec
+  (`verified_in_datadog`, `proposed_payload` = a valid DdMonitorSpec), and correctly
+  did NOT propose a monitor for the covered retry metric. Idempotent (dedupe folds
+  re-runs onto one rec).
+- Datadog MCP read shapes (live): `search_datadog_metrics(name_filter)` → bare JSON
+  array of names; `search_datadog_monitors(query)` → bare JSON array of monitor
+  objects, each WITH its `query` (the coverage signal) + name/type/message;
+  `get_monitor_coverage` is a dead end here (deadline-exceeds broad, returns nulls
+  per-service — coverage is computed from metrics×monitor-queries instead).
+- Model gotcha (gemini-3.5-flash): wraps the JSON in a ```json fence (a naive
+  JSON.parse marks the whole call invalid — extract the first balanced `{…}` instead)
+  and often omits `title`/`rationale` + emits off-vocab severity (synthesize the prose,
+  `.catch` the severity).
 
 ## Context
 

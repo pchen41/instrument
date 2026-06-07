@@ -32,7 +32,7 @@ function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string; 
   const findingsMap = new Map<string, LoadedScanFindings>();
   if (over.findings) findingsMap.set('scan-1', over.findings);
   const recs = new Map<string, { id: string; created: boolean }>();
-  const events = { followups: 0, upserts: 0, outdated: [] as string[] };
+  const events = { followups: 0, upserts: 0, outdated: [] as string[], alertCoverage: 0 };
   let seq = 0;
   const store: ScanStore = {
     hasCode: async (j) => codes.has(j),
@@ -42,6 +42,7 @@ function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string; 
     loadFindings: async (j) => findingsMap.get(j) ?? null,
     upsertInstrumentationRecommendation: async (i) => { events.upserts++; const ex = recs.get(i.dedupeFingerprint); if (ex) return { ...ex, created: false }; const r = { id: `rec-${++seq}`, created: true }; recs.set(i.dedupeFingerprint, r); return r; },
     enqueueFollowupScan: async () => { events.followups++; },
+    enqueueAlertCoverage: async () => { events.alertCoverage++; },
     loadPendingSha: async () => over.pendingSha ?? null,
     loadChangedFiles: async () => over.changedFiles ?? [],
     listActiveInstrumentation: async () => over.activeRecs ?? [],
@@ -123,5 +124,11 @@ describe('rank', () => {
     const b = fakeStore({ findings: valid([]), pendingSha: null });
     await makeScanExecutor(deps(fakeMcp(), b.store))({ job: job(), phaseKey: 'rank', attempt: 1 });
     expect(b.events.followups).toBe(0);
+  });
+
+  it('hands off ONE alert-coverage recommendation_generation job per scan', async () => {
+    const { store, events } = fakeStore({ findings: valid([]), pendingSha: null });
+    await makeScanExecutor(deps(fakeMcp(), store))({ job: job(), phaseKey: 'rank', attempt: 1 });
+    expect(events.alertCoverage).toBe(1);
   });
 });

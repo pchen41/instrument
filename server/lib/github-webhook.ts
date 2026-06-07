@@ -128,6 +128,11 @@ export function scanJobKey(repositoryId: string, sha: string): string {
   return `scan:${repositoryId}:${sha}`;
 }
 
+/** Stable idempotency key for the alert-coverage recommendation_generation job a scan spawns. */
+export function recGenJobKey(repositoryId: string, sha: string): string {
+  return `recgen:alert:${repositoryId}:${sha}`;
+}
+
 /** The most recent proactive_scan job for a repo, as the store reports it for coalescing. */
 export interface LatestScan {
   id: string;

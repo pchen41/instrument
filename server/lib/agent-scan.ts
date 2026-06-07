@@ -108,6 +108,8 @@ export interface ScanStore {
   loadFindings(jobId: string): Promise<LoadedScanFindings | null>;
   upsertInstrumentationRecommendation(input: UpsertInstrumentationInput): Promise<{ id: string; created: boolean }>;
   enqueueFollowupScan(workspaceId: string, repositoryId: string, repo: ScanJobContext['repo'], branch: string, sha: string, now: string): Promise<void>;
+  /** Enqueue ONE recommendation_generation job for Datadog alert coverage (idempotent per repo+sha). */
+  enqueueAlertCoverage(ctx: ScanJobContext, scanJobId: string, now: string): Promise<void>;
   /** The LIVE pending_sha from the job row (a push may have coalesced AFTER this scan was claimed). */
   loadPendingSha(jobId: string): Promise<string | null>;
   /** The changed file paths this scan examined (for invalidating stale recommendations). */
@@ -235,6 +237,12 @@ async function rank(deps: ScanDeps, ctx: ScanJobContext, jobId: string, now: () 
       }
     }
   }
+
+  // Alert-coverage handoff (Task 9 slice 2): enqueue ONE recommendation_generation
+  // job to analyze this repo's Datadog monitor/metric coverage and generate `alert`
+  // recommendations. Idempotent per repo+sha, and a separate durable job so the
+  // scan's own success isn't tied to Datadog availability.
+  await deps.store.enqueueAlertCoverage(ctx, jobId, now().toISOString());
 
   // Coalesced follow-up: read the LIVE pending_sha (a push may have coalesced AFTER
   // this scan was claimed — ctx is the frozen claim-time snapshot). Run ONE more

@@ -9,7 +9,7 @@ import { createMcpClient, type McpClient } from './mcp-client.ts';
 import { JobError } from '../../lib/retry.ts';
 import { scrubSecrets } from '../../lib/redaction.ts';
 import { scanFindingsSchema, parseScanFindings } from '../../lib/scan.ts';
-import { scanJobKey } from '../../lib/github-webhook.ts';
+import { recGenJobKey, scanJobKey } from '../../lib/github-webhook.ts';
 import type {
   ChangedCodeRead,
   LoadedScanFindings,
@@ -277,6 +277,40 @@ export function createScanStore(admin: Admin): ScanStore {
         },
       ]);
       if (error && !isUniqueViolation(error)) throw new JobError({ retryable: true, code: 'followup_enqueue_failed', summary: 'Could not enqueue the follow-up scan.', source: 'worker' });
+    },
+
+    async enqueueAlertCoverage(ctx, scanJobId, now) {
+      // Namespace = the repo short name (the dogfood metrics are `instrument.*`),
+      // used as the search_datadog_metrics / search_datadog_monitors filter.
+      const namespace = ctx.repo.name || ctx.repo.fullName.split('/').pop() || ctx.repo.fullName;
+      const { error } = await db.from('jobs').insert([
+        {
+          workspace_id: ctx.workspaceId,
+          job_type: 'recommendation_generation',
+          state: 'queued',
+          target_type: 'repository',
+          target_id: ctx.repositoryId,
+          idempotency_key: recGenJobKey(ctx.repositoryId, ctx.headSha),
+          created_by: null,
+          safe_to_retry: true,
+          attempt_count: 0,
+          max_attempts: 3,
+          retry_policy: {},
+          phases: [],
+          attempts: [],
+          audit_events: [{ at: now, kind: 'enqueued', summary: `Alert coverage analysis for ${namespace} @ ${ctx.headSha.slice(0, 7)}` }],
+          // NB: do NOT forward ctx.integrationId — that's the GitHub integration; the
+          // recgen model call belongs to TrueFoundry. Leave null so the model-call
+          // store resolves/sentinels it rather than mislabelling ai_model_calls.
+          trigger_summary: { source: 'alert_coverage', repo: ctx.repo, branch: ctx.branch, namespace, head_sha: ctx.headSha, scan_job_id: scanJobId, integration_id: null },
+          queued_at: now,
+          next_run_at: now,
+          lease_expires_at: LEASE_FREE,
+          locked_by: null,
+          progress_version: 1,
+        },
+      ]);
+      if (error && !isUniqueViolation(error)) throw new JobError({ retryable: true, code: 'alert_coverage_enqueue_failed', summary: 'Could not enqueue the alert-coverage job.', source: 'worker' });
     },
   };
 }
