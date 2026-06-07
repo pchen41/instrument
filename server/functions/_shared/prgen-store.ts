@@ -158,8 +158,15 @@ export function createPrGenStore(admin: Admin): PrGenStore {
     const { data, error } = await db.from('recommendations').select('steps').eq('id', recommendationId).maybeSingle();
     if (error) throw new JobError({ retryable: true, code: 'recommendation_read_failed', summary: 'Could not read the recommendation steps.', source: 'worker' });
     const steps = Array.isArray(data?.steps) ? [...(data!.steps as any[])] : [];
-    const idx = steps.findIndex((s) => s?.key === stepKey);
-    if (idx < 0) return; // no matching step (e.g. instrumentation rec with no code_pr step yet)
+    // Use a stable effective key so repeated calls hit the same step (an
+    // instrumentation rec from Task 7 has no code_pr step yet — materialize one so
+    // the generated PR is linked and the merge→done→accepted lifecycle can run).
+    const effectiveKey = stepKey ?? 'generate-pr';
+    let idx = steps.findIndex((s) => s?.key === effectiveKey);
+    if (idx < 0) {
+      steps.push({ key: effectiveKey, kind: 'code_pr', label: 'Generate instrumentation PR', order: steps.length, state: 'available', target_provider: 'github' });
+      idx = steps.length - 1;
+    }
     steps[idx] = { ...steps[idx] };
     mut(steps[idx]);
     const { error: upErr } = await db.from('recommendations').update({ steps, updated_at: now }).eq('id', recommendationId);

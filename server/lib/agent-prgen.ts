@@ -138,6 +138,9 @@ async function loadApprovedPlan(deps: PrGenDeps, ctx: PrGenJobContext): Promise<
   if (!plan) throw new JobError({ retryable: false, code: 'prgen_plan_missing', summary: 'The approval/recommendation for PR generation was not found.', source: 'worker' });
   // Governance: never write to GitHub for an approval that isn't approved + unrevoked.
   if (plan.approvalState !== 'approved') throw new JobError({ retryable: false, code: 'approval_not_approved', summary: `Approval is ${plan.approvalState}, not approved — refusing to generate.`, source: 'worker' });
+  // The ERD requires each write's request_hash == approved_payload_hash; a missing
+  // hash can't satisfy that, so refuse rather than write with an empty hash.
+  if (!plan.approvedPayloadHash) throw new JobError({ retryable: false, code: 'approval_hash_missing', summary: 'Approval has no approved_payload_hash — refusing to generate.', source: 'worker' });
   return plan;
 }
 

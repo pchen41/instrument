@@ -324,7 +324,9 @@ export function createGithubWebhookStore(admin: Admin) {
       );
       const allRequiredDone = steps.every((s) => s?.state === 'done' || s?.required === false);
       const patch: Record<string, unknown> = { steps, updated_at: now };
-      if (allRequiredDone && data.state !== 'accepted') {
+      // Accept ONLY from active (don't resurrect a dismissed/outdated rec — that's
+      // an invalid transition).
+      if (allRequiredDone && data.state === 'active') {
         patch.state = 'accepted';
         patch.accepted_at = now;
       }
