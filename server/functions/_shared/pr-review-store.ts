@@ -378,8 +378,8 @@ export function createPrReviewStore(admin: Admin): PrReviewStore {
       const { data: sameRev } = await db.from('pr_review_comments').select('id, external_comment_id').eq('pull_request_id', input.pullRequestId).eq('revision_fingerprint', input.revisionFingerprint).limit(1).maybeSingle();
       if (sameRev?.id) return { state: 'resumed', id: sameRev.id as string, externalCommentId: (sameRev.external_comment_id as string | null) ?? null };
       // A different posted row for the same semantic gap (earlier revision / concurrent job)?
-      const { data: posted } = await db.from('pr_review_comments').select('id, suggested_code').eq('pull_request_id', input.pullRequestId).eq('semantic_fingerprint', input.semanticFingerprint).eq('status', 'posted').limit(1).maybeSingle();
-      if (posted?.id) return { state: 'exists', existing: { id: posted.id as string, suggested_code: (posted.suggested_code as string | null) ?? null } };
+      const { data: posted } = await db.from('pr_review_comments').select('id').eq('pull_request_id', input.pullRequestId).eq('semantic_fingerprint', input.semanticFingerprint).eq('status', 'posted').limit(1).maybeSingle();
+      if (posted?.id) return { state: 'exists', existing: { id: posted.id as string } };
       return { state: 'lost' };
     },
 

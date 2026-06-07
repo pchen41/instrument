@@ -55,6 +55,10 @@ export function createGateway(): AgentGateway {
               stream: true,
               stream_options: { include_usage: true },
               max_tokens: req.maxTokens ?? 256,
+              // Greedy decoding for consistent structured output across runs — the
+              // PR-review dedupe + investigation reproducibility depend on the same
+              // input yielding the same findings/hypotheses.
+              temperature: 0,
               messages: [
                 ...(req.system ? [{ role: 'system', content: req.system }] : []),
                 { role: 'user', content: req.user },

@@ -59,7 +59,7 @@ function fakeStore(over: { findings?: LoadedFindings | null; diff?: { diffText: 
       const sameRev = comments.find((c) => c.revision === i.revisionFingerprint);
       if (sameRev) return { state: 'resumed', id: sameRev.id, externalCommentId: sameRev.external_comment_id };
       const posted = comments.find((c) => c.semantic === i.semanticFingerprint && c.status === 'posted');
-      if (posted) return { state: 'exists', existing: { id: posted.id, suggested_code: posted.suggested_code } };
+      if (posted) return { state: 'exists', existing: { id: posted.id } };
       const id = `c-${++cseq}`;
       comments.push({ id, semantic: i.semanticFingerprint, revision: i.revisionFingerprint, status: 'posted', suggested_code: i.finding.suggested_code ?? null, external_comment_id: null, external_write_action_id: null });
       return { state: 'claimed', id };
@@ -170,13 +170,15 @@ describe('compose', () => {
     expect(events.skipped).toBe(1);
   });
 
-  it('repost_changed: same gap, suggested fix changed — outdate old + post new', async () => {
+  it('never reposts the same gap even when the suggested fix wording changed', async () => {
     const mcp = fakeMcp();
     const { store, events } = fakeStore({ findings: valid([finding({ suggested_code: 'metrics.timing()' })]) });
     await store.claimPostedComment({ workspaceId: 'ws-1', pullRequestId: 'pr-1', jobId: 'old', recommendationId: 'r', modelCallId: 'm', eventAction: null, headSha: 'oldsha', semanticFingerprint: semanticOf(finding()), revisionFingerprint: 'old-rev', finding: finding({ suggested_code: null }), now: 't' });
     await makePrReviewExecutor(deps(mcp, store))({ job: job(), phaseKey: 'compose', attempt: 1 });
-    expect(mcp.posts).toBe(1);
-    expect(events.outdated).toHaveLength(1);
+    expect(mcp.posts).toBe(0); // no repost — the gap is already posted
+    expect(events.outdated).toHaveLength(0);
+    expect(events.refreshed).toHaveLength(1); // placement refreshed instead
+    expect(events.skipped).toBe(1);
   });
 
   it('resume: an already-finalized revision posts nothing', async () => {

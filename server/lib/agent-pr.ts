@@ -25,10 +25,10 @@ import {
   type PrFindings,
   buildFindingsMessages,
   formatCommentBody,
-  materiallyChanged,
   parseFindings,
   PR_FINDINGS_SCHEMA_VERSION,
   prFindingsSchema,
+  prReviewDedupeFingerprint,
   reviewCommentWriteKey,
   revisionFingerprint,
   semanticFingerprint,
@@ -162,7 +162,7 @@ export interface ClaimCommentInput {
 export type ClaimResult =
   | { state: 'claimed'; id: string }
   | { state: 'resumed'; id: string; externalCommentId: string | null }
-  | { state: 'exists'; existing: { id: string; suggested_code: string | null } }
+  | { state: 'exists'; existing: { id: string } }
   | { state: 'lost' };
 export interface RefreshPlacementInput {
   id: string;
@@ -283,7 +283,10 @@ async function analyze(deps: PrReviewDeps, ctx: PrJobContext, jobId: string, reg
       request: {
         apiSurface: 'agent_chat_completions',
         messages: buildFindingsMessages({ repoFullName: ctx.repo.fullName, prNumber: ctx.prNumber, title: ctx.title, baseBranch: ctx.baseBranch, headBranch: ctx.headBranch, diffText: diff.diffText }),
-        maxTokens: 900,
+        // The gateway model is a reasoning model (gemini-3.5-flash) that spends
+        // most of its budget on hidden reasoning tokens, so the JSON needs ample
+        // room or it truncates at finish_reason 'length'.
+        maxTokens: 3000,
       },
       requestSchemaVersion: 'pr_review_request.v1',
       outputSchemaVersion: PR_FINDINGS_SCHEMA_VERSION,
@@ -316,7 +319,7 @@ async function compose(deps: PrReviewDeps, ctx: PrJobContext, job: JobRow, now: 
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const eventAction = (job.trigger_summary as Record<string, any>)?.action ?? null;
-  const dedupeFp = `pr_review:${ctx.repo.fullName.toLowerCase()}#${ctx.prNumber}`;
+  const dedupeFp = prReviewDedupeFingerprint(ctx.repo.fullName, ctx.prNumber);
   const recommendationId = await deps.store.upsertRecommendation({
     workspaceId: ctx.workspaceId,
     jobId: job.id,
@@ -357,19 +360,12 @@ async function handleFinding(deps: PrReviewDeps, ctx: PrJobContext, jobId: strin
   const claim = await deps.store.claimPostedComment(claimInput);
 
   if (claim.state === 'exists') {
-    // A posted row for this gap already exists (earlier revision OR a concurrent
-    // job won the claim). Repost only if the suggested fix materially changed.
-    if (materiallyChanged(claim.existing, finding)) {
-      await deps.store.outdateComment(claim.existing.id, now().toISOString());
-      const re = await deps.store.claimPostedComment(claimInput);
-      if (re.state !== 'claimed') {
-        await recordSkippedWrite(deps, ctx, jobId, finding, revision, now);
-        return;
-      }
-      await postAndFinalize(deps, ctx, jobId, finding, re.id, revision, false, now);
-      return;
-    }
-    // Same unresolved gap on a later revision → refresh placement, no repost (PR-6).
+    // The gap is already posted (an earlier revision OR a concurrent job won the
+    // claim). We NEVER repost the same semantic gap: the model rewords the
+    // suggested fix / issue_type between runs, so a "material change" repost would
+    // just create a duplicate comment for the same gap (observed live). A later
+    // revision with the same unresolved gap refreshes the row's placement + audits
+    // a skipped write, with no new GitHub comment (PR-6).
     await deps.store.refreshCommentPlacement({ id: claim.existing.id, revisionFingerprint: revision, headSha: ctx.headSha, lineNumber: finding.line_number, now: now().toISOString() });
     await recordSkippedWrite(deps, ctx, jobId, finding, revision, now);
     return;

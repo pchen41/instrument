@@ -7,6 +7,7 @@ import {
   isLifecycleAction,
   parsePullRequestEvent,
   prCorrelationKey,
+  prLifecycleReason,
   prReviewJobKey,
   redactedHeaders,
   verifyGithubSignature,
@@ -106,6 +107,10 @@ describe('action classification', () => {
   it('treats closed as a lifecycle action', () => {
     expect(isLifecycleAction('closed')).toBe(true);
     expect(isLifecycleAction('opened')).toBe(false);
+  });
+  it('maps the lifecycle outdated reason from merged vs closed', () => {
+    expect(prLifecycleReason(true)).toBe('pr_merged');
+    expect(prLifecycleReason(false)).toBe('pr_closed');
   });
 });
 

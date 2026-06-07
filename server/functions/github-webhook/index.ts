@@ -28,6 +28,7 @@ import {
   isLifecycleAction,
   parsePullRequestEvent,
   prCorrelationKey,
+  prLifecycleReason,
   prReviewJobKey,
   redactedHeaders,
   verifyGithubSignature,
@@ -231,10 +232,16 @@ export default async function (req: Request): Promise<Response> {
       }
     }
 
-    // Merged/closed lifecycle: PR state is updated by the upsert above. Marking
-    // the related pr_review recommendation `outdated` + archived lands in the
-    // `closed` lifecycle slice (and Task 8 extends generated-PR state).
+    // Merged/closed lifecycle: PR state is updated by the upsert above; now
+    // archive the PR's review recommendation (Task 8 will extend this branch to
+    // sync GENERATED recommendation PRs — opened/merged/closed/stale).
     const isLifecycle = isLifecycleAction(action);
+    if (isLifecycle) {
+      await store.outdatePrReviewRecommendation(workspaceId, parsed.repo.fullName, parsed.pr.number, pullRequestId, prLifecycleReason(parsed.pr.merged), now);
+    } else if (action === 'reopened') {
+      // Re-opening un-archives the recommendation (a re-analysis job is also enqueued above).
+      await store.reactivatePrReviewRecommendation(workspaceId, parsed.repo.fullName, parsed.pr.number, now);
+    }
 
     await store.markDelivery(delivery.id, { processingStatus: 'processed', processedAt: isoSeconds(systemClock.now()) });
     endSpan({ ok: true, enqueued: !!jobId && !deduped, deduped, lifecycle: isLifecycle });

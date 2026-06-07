@@ -8,6 +8,7 @@
 // configured repositories"). Unverified deliveries are recorded with
 // signature_valid=false and a minimal, non-forgeable note, never their payload.
 import { isUniqueViolation } from './agent-runtime.ts';
+import { prReviewDedupeFingerprint } from '../../lib/pr-review.ts';
 import type { NormalizedPr, NormalizedRepo } from '../../lib/github-webhook.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -224,6 +225,54 @@ export function createGithubWebhookStore(admin: Admin) {
         throw error;
       }
       return (data as { id: string }[])[0].id;
+    },
+
+    /**
+     * Merged/closed lifecycle (Task 6 slice 3): mark the PR's category-`pr_review`
+     * recommendation `outdated` + archive it, and outdate its posted comment rows.
+     * Best-effort + idempotent — no-op if the PR was never analyzed (no rec) or is
+     * already outdated. We do NOT detect whether the author applied the suggestion
+     * (out of first-slice scope); a closed PR's review is simply stale.
+     */
+    async outdatePrReviewRecommendation(workspaceId: string, repoFullName: string, prNumber: number, pullRequestId: string, reason: string, now: string): Promise<boolean> {
+      // Outdate the posted comments FIRST and ALWAYS (idempotent: WHERE status='posted'
+      // matches nothing on a repeat). Doing this independently of the recommendation
+      // state means a redelivery after a partial failure still clears them — a
+      // state-guarded early-return would otherwise leave them stuck 'posted' and
+      // keep the (pull_request_id, semantic_fingerprint) partial-unique locked.
+      const { error: cErr } = await db.from('pr_review_comments').update({ status: 'outdated', outdated_at: now, updated_at: now }).eq('pull_request_id', pullRequestId).eq('status', 'posted');
+      if (cErr) throw cErr;
+      const fingerprint = prReviewDedupeFingerprint(repoFullName, prNumber);
+      const { data, error } = await db.from('recommendations').select('id, state, lifecycle_events').eq('workspace_id', workspaceId).eq('dedupe_fingerprint', fingerprint).limit(1).maybeSingle();
+      if (error) throw error;
+      if (!data?.id) return false;
+      if (data.state === 'outdated') return true; // already archived; comments handled above
+      const prior = Array.isArray(data.lifecycle_events) ? (data.lifecycle_events as unknown[]) : [];
+      const lifecycle = [...prior, { at: now, kind: 'outdated', reason }].slice(-50);
+      const { error: updErr } = await db
+        .from('recommendations')
+        .update({ state: 'outdated', outdated_reason: reason, outdated_at: now, lifecycle_events: lifecycle, updated_at: now })
+        .eq('id', data.id);
+      if (updErr) throw updErr;
+      return true;
+    },
+
+    /**
+     * A reopened PR un-archives its review recommendation (idempotent; only an
+     * `outdated` rec is reactivated). Comments stay `outdated`; a re-analysis on the
+     * reopened head posts fresh ones. (A prior physical GitHub comment can't be
+     * deleted here, so reopen+push can leave a duplicate comment — documented.)
+     */
+    async reactivatePrReviewRecommendation(workspaceId: string, repoFullName: string, prNumber: number, now: string): Promise<boolean> {
+      const fingerprint = prReviewDedupeFingerprint(repoFullName, prNumber);
+      const { data, error } = await db.from('recommendations').select('id, state, lifecycle_events').eq('workspace_id', workspaceId).eq('dedupe_fingerprint', fingerprint).limit(1).maybeSingle();
+      if (error) throw error;
+      if (!data?.id || data.state !== 'outdated') return false;
+      const prior = Array.isArray(data.lifecycle_events) ? (data.lifecycle_events as unknown[]) : [];
+      const lifecycle = [...prior, { at: now, kind: 'reopened' }].slice(-50);
+      const { error: updErr } = await db.from('recommendations').update({ state: 'active', outdated_reason: null, outdated_at: null, lifecycle_events: lifecycle, updated_at: now }).eq('id', data.id);
+      if (updErr) throw updErr;
+      return true;
     },
   };
 }

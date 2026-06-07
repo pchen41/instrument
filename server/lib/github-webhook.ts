@@ -48,6 +48,11 @@ export function isLifecycleAction(action: string | null | undefined): boolean {
   return !!action && PR_LIFECYCLE_ACTIONS.has(action);
 }
 
+/** Reason a PR's review recommendation is outdated when the PR closes (merged vs closed). */
+export function prLifecycleReason(merged: boolean): string {
+  return merged ? 'pr_merged' : 'pr_closed';
+}
+
 // ---- Normalized payload shapes ----------------------------------------------
 
 export interface NormalizedRepo {
