@@ -10,6 +10,7 @@ import { createPgDb } from '../_shared/pgdb.ts';
 import { ActionError, handleAction } from '../../lib/actions.ts';
 import { createDatadogClient } from '../_shared/datadog-client.ts';
 import { createJobTelemetryEmitter } from '../_shared/telemetry-store.ts';
+import { buildExecutePhase } from '../_shared/executors.ts';
 import { runTick } from '../../lib/worker.ts';
 import { createConsoleSink, createInstrumentation } from '../../lib/instrumentation.ts';
 import { systemClock } from '../../lib/time.ts';
@@ -75,6 +76,7 @@ export default async function (req: Request): Promise<Response> {
           clock: systemClock,
           maxJobs: 5,
           phaseDelayMs: 120,
+          executePhase: buildExecutePhase(admin),
           emitJobTelemetry: createJobTelemetryEmitter(admin, datadog),
         });
       } catch {

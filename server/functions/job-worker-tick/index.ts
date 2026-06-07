@@ -17,10 +17,9 @@
 import { createAdminClient } from 'npm:@insforge/sdk';
 import { json, preflight } from '../_shared/http.ts';
 import { createPgDb } from '../_shared/pgdb.ts';
-import { createGateway, createScriptedToolHost, createWorkStore } from '../_shared/agent-runtime.ts';
+import { buildExecutePhase } from '../_shared/executors.ts';
 import { createDatadogClient } from '../_shared/datadog-client.ts';
 import { createJobTelemetryEmitter } from '../_shared/telemetry-store.ts';
-import { makeInvestigationExecutor } from '../../lib/agent.ts';
 import { runTick } from '../../lib/worker.ts';
 import { createConsoleSink, createInstrumentation } from '../../lib/instrumentation.ts';
 import { systemClock } from '../../lib/time.ts';
@@ -57,14 +56,11 @@ export default async function (req: Request): Promise<Response> {
   const admin = createAdminClient({ baseUrl, apiKey });
   const db = createPgDb(admin);
 
-  // Real per-phase work for viability jobs; the executor no-ops for every other
-  // job, and a viability job in a workspace with no TrueFoundry integration fails
-  // explicitly inside the store (rather than silently running the simulated path).
-  const executePhase = makeInvestigationExecutor({
-    gateway: createGateway(),
-    tools: createScriptedToolHost(),
-    store: createWorkStore(admin),
-  });
+  // Real per-phase work: viability jobs run the investigation executor; a
+  // github_pr_review_analysis job runs the PR-review executor (github MCP read +
+  // gateway analysis + scoped comment write). Both no-op for seeded/simulated 5A
+  // jobs, so the durable engine path is untouched.
+  const executePhase = buildExecutePhase(admin);
 
   // Task 5D: reliability emitter (Datadog metric+event + telemetry_emissions) and
   // broad worker instrumentation. The Datadog client is a mock sink when
