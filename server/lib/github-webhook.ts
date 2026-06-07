@@ -154,7 +154,11 @@ export type ScanDecision =
 export function decideScan(push: NormalizedPush, latest: LatestScan | null, cooldownSeconds: number, now: Date): ScanDecision {
   const nowIso = now.toISOString();
   if (!latest) return { action: 'enqueue', sha: push.after, runAt: nowIso };
-  if (latest.afterSha === push.after && latest.state !== 'failed') return { action: 'skip', reason: 'head sha already scanned or in flight' };
+  // A job for this exact head SHA already exists (any state, incl. failed) — skip.
+  // A failed scan won't auto-re-run on a redelivery; that's the worker's retry
+  // budget / a manual retry to own, not the webhook's (it must not imply a re-scan
+  // it doesn't deliver).
+  if (latest.afterSha === push.after) return { action: 'skip', reason: `head sha already has a scan (${latest.state})` };
   if (latest.state === 'queued' || latest.state === 'running' || latest.state === 'retrying') {
     return { action: 'coalesce', ontoJobId: latest.id, sha: push.after };
   }

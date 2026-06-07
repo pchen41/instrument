@@ -88,6 +88,6 @@ export function recommendationFields(finding: ScanFinding): { title: string; rat
     title: scrubSecrets(finding.title).slice(0, 200),
     rationale: scrubSecrets(finding.rationale).slice(0, 1200),
     proposedNextStep: scrubSecrets(finding.proposed_next_step).slice(0, 600),
-    affectedCodePath: finding.file_path + (finding.code_anchor ? `:${finding.code_anchor}`.slice(0, 80) : ''),
+    affectedCodePath: scrubSecrets(finding.file_path + (finding.code_anchor ? `:${finding.code_anchor}` : '')).slice(0, 480),
   };
 }

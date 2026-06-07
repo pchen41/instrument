@@ -171,10 +171,20 @@ export default async function (req: Request): Promise<Response> {
       deliveryRowId = pushDelivery.id;
       const decision = decideScan(push, await store.latestScan(pushRepo.id), pushRepo.scanCooldownSeconds, systemClock.now());
       let scanJobId: string | null = null;
+      // coalesce → stamp pending on the in-flight scan; if it already finished
+      // (markScanPending returns false), fall through to a fresh enqueue so the
+      // push that raced the completion isn't lost.
+      let enqueueSha: string | null = null;
+      let enqueueRunAt = now;
       if (decision.action === 'coalesce') {
-        await store.markScanPending(decision.ontoJobId, decision.sha, now);
+        const marked = await store.markScanPending(decision.ontoJobId, decision.sha, now);
+        if (!marked) enqueueSha = decision.sha;
       } else if (decision.action === 'enqueue') {
-        const key = scanJobKey(pushRepo.id, decision.sha);
+        enqueueSha = decision.sha;
+        enqueueRunAt = decision.runAt;
+      }
+      if (enqueueSha) {
+        const key = scanJobKey(pushRepo.id, enqueueSha);
         const existing = await db.findJobByIdempotency(pushWorkspace, 'proactive_scan', key);
         if (existing) {
           scanJobId = existing.id;
@@ -193,13 +203,13 @@ export default async function (req: Request): Promise<Response> {
             retry_policy: {},
             phases: [],
             attempts: [],
-            audit_events: [{ at: now, kind: 'enqueued', summary: `Primary-branch push ${decision.sha.slice(0, 7)}` }],
+            audit_events: [{ at: now, kind: 'enqueued', summary: `Primary-branch push ${enqueueSha.slice(0, 7)}` }],
             trigger_summary: {
               source: 'github_push',
               webhook_event_id: pushDelivery.id,
               repo: { owner, name: (payload as any).repository.name, full_name: (payload as any)?.repository?.full_name },
               branch: push.branch,
-              after_sha: decision.sha,
+              after_sha: enqueueSha,
               before_sha: push.before,
               head_commit_sha: push.headCommitSha,
               commit_count: push.commitCount,
@@ -207,7 +217,7 @@ export default async function (req: Request): Promise<Response> {
               pending_sha: null,
             },
             queued_at: now,
-            next_run_at: decision.runAt,
+            next_run_at: enqueueRunAt,
             lease_expires_at: LEASE_FREE,
             locked_by: null,
             progress_version: 1,

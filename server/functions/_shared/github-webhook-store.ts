@@ -280,12 +280,24 @@ export function createGithubWebhookStore(admin: Admin) {
       return { id: data.id as string, state: data.state as string, afterSha: ts.after_sha ?? '', completedAt: (data.completed_at as string | null) ?? null };
     },
 
-    /** Coalesce: stamp the newest head SHA onto an in-flight scan's trigger_summary. */
-    async markScanPending(jobId: string, sha: string, now: string): Promise<void> {
-      const { data } = await db.from('jobs').select('trigger_summary').eq('id', jobId).maybeSingle();
-      const ts = (data?.trigger_summary ?? {}) as Record<string, unknown>;
-      const { error } = await db.from('jobs').update({ trigger_summary: { ...ts, pending_sha: sha, pending_marked_at: now } }).eq('id', jobId);
+    /**
+     * Coalesce: stamp the newest head SHA onto an in-flight scan's trigger_summary.
+     * Returns false if the job is no longer in-flight (terminal) — the caller then
+     * enqueues a fresh scan instead, so a push that races the scan's completion
+     * isn't lost. (Re-reads + conditionally updates; the state guard is the lock.)
+     */
+    async markScanPending(jobId: string, sha: string, now: string): Promise<boolean> {
+      const { data } = await db.from('jobs').select('trigger_summary, state').eq('id', jobId).maybeSingle();
+      if (!data || !['queued', 'running', 'retrying'].includes(data.state as string)) return false;
+      const ts = (data.trigger_summary ?? {}) as Record<string, unknown>;
+      const { data: updated, error } = await db
+        .from('jobs')
+        .update({ trigger_summary: { ...ts, pending_sha: sha, pending_marked_at: now } })
+        .eq('id', jobId)
+        .in('state', ['queued', 'running', 'retrying'])
+        .select('id');
       if (error) throw error;
+      return (updated ?? []).length > 0;
     },
 
     /**

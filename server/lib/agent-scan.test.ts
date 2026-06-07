@@ -27,7 +27,7 @@ function fakeMcp(): ScanMcp & { reads: number } {
   const self: any = { reads: 0, readChangedCode: vi.fn(async () => { self.reads++; return { changedCode: '+ un-instrumented code', files: [{ path: 'src/a.ts' }], externalId: 'scan:x', payload: {} }; }) };
   return self;
 }
-function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string } = {}) {
+function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string; pendingSha?: string | null } = {}) {
   const codes = new Map<string, string>();
   const findingsMap = new Map<string, LoadedScanFindings>();
   if (over.findings) findingsMap.set('scan-1', over.findings);
@@ -42,6 +42,7 @@ function fakeStore(over: { findings?: LoadedScanFindings | null; code?: string }
     loadFindings: async (j) => findingsMap.get(j) ?? null,
     upsertInstrumentationRecommendation: async (i) => { events.upserts++; const ex = recs.get(i.dedupeFingerprint); if (ex) return { ...ex, created: false }; const r = { id: `rec-${++seq}`, created: true }; recs.set(i.dedupeFingerprint, r); return r; },
     enqueueFollowupScan: async () => { events.followups++; },
+    loadPendingSha: async () => over.pendingSha ?? null,
   };
   return { store, recs, events };
 }
@@ -91,14 +92,17 @@ describe('rank', () => {
     expect(recs.size).toBe(2);
     expect(events.upserts).toBe(3); // upsert called per finding; the 3rd folds onto handleA
   });
-  it('enqueues a coalesced follow-up when a newer sha is pending', async () => {
-    const { store, events } = fakeStore({ findings: valid([]) });
-    await makeScanExecutor(deps(fakeMcp(), store))({ job: job({ trigger_summary: { source: 'github_push', repo: { owner: 'pchen41', name: 'instrument', full_name: REPO }, branch: 'main', after_sha: SHA, pending_sha: 'newer999' } } as any), phaseKey: 'rank', attempt: 1 });
+  it('enqueues a coalesced follow-up for the LIVE pending sha (not the stale snapshot)', async () => {
+    const { store, events } = fakeStore({ findings: valid([]), pendingSha: 'newer999' });
+    await makeScanExecutor(deps(fakeMcp(), store))({ job: job(), phaseKey: 'rank', attempt: 1 });
     expect(events.followups).toBe(1);
   });
-  it('no follow-up when pending sha equals the scanned sha', async () => {
-    const { store, events } = fakeStore({ findings: valid([]) });
-    await makeScanExecutor(deps(fakeMcp(), store))({ job: job({ trigger_summary: { source: 'github_push', repo: { full_name: REPO }, branch: 'main', after_sha: SHA, pending_sha: SHA } } as any), phaseKey: 'rank', attempt: 1 });
-    expect(events.followups).toBe(0);
+  it('no follow-up when the live pending sha equals the scanned sha (or is absent)', async () => {
+    const a = fakeStore({ findings: valid([]), pendingSha: SHA });
+    await makeScanExecutor(deps(fakeMcp(), a.store))({ job: job(), phaseKey: 'rank', attempt: 1 });
+    expect(a.events.followups).toBe(0);
+    const b = fakeStore({ findings: valid([]), pendingSha: null });
+    await makeScanExecutor(deps(fakeMcp(), b.store))({ job: job(), phaseKey: 'rank', attempt: 1 });
+    expect(b.events.followups).toBe(0);
   });
 });

@@ -204,6 +204,12 @@ export function createScanStore(admin: Admin): ScanStore {
       return { id: (data as { id: string }[])[0].id, created: true };
     },
 
+    async loadPendingSha(jobId) {
+      const { data, error } = await db.from('jobs').select('trigger_summary').eq('id', jobId).maybeSingle();
+      if (error) throw new JobError({ retryable: true, code: 'job_read_failed', summary: 'Could not read the scan job.', source: 'worker' });
+      return ((data?.trigger_summary ?? {}) as { pending_sha?: string | null }).pending_sha ?? null;
+    },
+
     async enqueueFollowupScan(workspaceId, repositoryId, repo, branch, sha, now) {
       const { error } = await db.from('jobs').insert([
         {

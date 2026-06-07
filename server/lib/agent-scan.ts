@@ -108,6 +108,8 @@ export interface ScanStore {
   loadFindings(jobId: string): Promise<LoadedScanFindings | null>;
   upsertInstrumentationRecommendation(input: UpsertInstrumentationInput): Promise<{ id: string; created: boolean }>;
   enqueueFollowupScan(workspaceId: string, repositoryId: string, repo: ScanJobContext['repo'], branch: string, sha: string, now: string): Promise<void>;
+  /** The LIVE pending_sha from the job row (a push may have coalesced AFTER this scan was claimed). */
+  loadPendingSha(jobId: string): Promise<string | null>;
 }
 
 export interface ScanDeps {
@@ -158,6 +160,8 @@ async function enumerate(deps: ScanDeps, ctx: ScanJobContext, jobId: string, now
 }
 
 async function analyze(deps: ScanDeps, ctx: ScanJobContext, jobId: string, registry: SchemaRegistry, now: () => Date): Promise<void> {
+  // Resume guard: if findings already persisted, don't re-invoke (re-bill) the gateway.
+  if (await deps.store.loadFindings(jobId)) return;
   const changedCode = await deps.store.loadCode(jobId);
   if (changedCode === null) throw new JobError({ retryable: true, code: 'scan_code_unavailable', summary: 'The scanned code was not available for analysis.', source: 'worker' });
   const outcome: RunModelCallOutcome = await runModelCall(
@@ -176,7 +180,7 @@ async function analyze(deps: ScanDeps, ctx: ScanJobContext, jobId: string, regis
       outputSchemaVersion: SCAN_FINDINGS_SCHEMA_VERSION,
       parseStructured: parseScanFindings,
       gatewayBaseUrlName: 'truefoundry',
-      subjectType: 'recommendation',
+      subjectType: 'repository', // scan evidence is repository-scoped (subjectId = repositoryId)
       subjectId: ctx.repositoryId,
     },
   );
@@ -207,9 +211,11 @@ async function rank(deps: ScanDeps, ctx: ScanJobContext, jobId: string, now: () 
     }
   }
 
-  // Coalesced follow-up: if pushes arrived while this scan ran, run ONE more for
-  // the newest SHA (idempotent on scan:repo:sha, so a re-run is a no-op).
-  if (ctx.pendingSha && ctx.pendingSha !== ctx.headSha) {
-    await deps.store.enqueueFollowupScan(ctx.workspaceId, ctx.repositoryId, ctx.repo, ctx.branch, ctx.pendingSha, now().toISOString());
+  // Coalesced follow-up: read the LIVE pending_sha (a push may have coalesced AFTER
+  // this scan was claimed — ctx is the frozen claim-time snapshot). Run ONE more
+  // scan for the newest SHA, idempotent on scan:repo:sha so a re-run is a no-op.
+  const pendingSha = await deps.store.loadPendingSha(jobId);
+  if (pendingSha && pendingSha !== ctx.headSha) {
+    await deps.store.enqueueFollowupScan(ctx.workspaceId, ctx.repositoryId, ctx.repo, ctx.branch, pendingSha, now().toISOString());
   }
 }

@@ -97,4 +97,33 @@ and lifecycle implementation.
 
 ## Progress Notes
 
-- Update this section with scan triggers, cooldown behavior, schema versions, and known recommendation generation limits.
+- Trigger: `push` to the repo's `default_branch` (the github-webhook is subscribed
+  to pull_request + push). Cooldown/coalescing via
+  `workspaces.primary_branch_scan_cooldown_seconds` (30s): same head SHA → skip; an
+  in-flight scan → stamp newest SHA as `trigger_summary.pending_sha`, and the
+  running scan enqueues ONE follow-up for it when it finishes; a scan that finished
+  within the cooldown → enqueue deferred. Idempotency key `scan:{repoId}:{sha}`.
+- Architecture: pure `server/lib/scan.ts` (instrumentation findings schema +
+  `scanDedupeFingerprint` + prompt) + `agent-scan.ts` (enumerate→analyze→rank
+  PhaseExecutor); Deno IO `_shared/scan-store.ts` (get_commit MCP read +
+  recommendation upsert). Dispatched via `_shared/executors.ts`. Schema version
+  `instrumentation_findings.v1`; recommendation `validated_schema_version`
+  `recommendation.v1`. Dedupe reuses the Task 6 `issueKind()` bucketing + the
+  `recommendations_dedupe_uniq` unique index.
+- Three-way reviewed (Claude/Codex/Gemini). Applied: rank reads the LIVE
+  `pending_sha` (not the frozen claim-time snapshot — the unanimous HIGH);
+  `markScanPending` is state-guarded + the webhook enqueues a fresh scan if the
+  coalesce target already finished; a failed same-SHA scan is skipped (not falsely
+  re-reported); analyze has a resume guard so it can't re-bill the gateway; scan
+  evidence subject is repository-scoped; `affected_code_path` is scrubbed.
+- **Known limitations (documented, not yet built):** (1) the OUTDATING side of
+  lifecycle — marking a prior recommendation `outdated` when its code/context is
+  gone — is not implemented (create/update/dedupe is). (2) `enumerate` reads only
+  the head commit (`get_commit(after_sha)`); a multi-commit / coalesced push's
+  intermediate commits aren't scanned (the `before..after` range is stored but not
+  read). (3) Two near-simultaneous distinct-SHA pushes can briefly run two scans
+  (the `scan:repo:sha` key only collapses identical SHAs; recommendation dedupe
+  still prevents duplicate rows, so the only cost is wasted gateway spend). (4) the
+  push path doesn't refresh `repositories.default_branch`. A real primary-branch
+  (main) push hasn't been fired — the live e2e enqueued a scan of a real commit
+  directly (2 instrumentation recommendations generated + deduped).
