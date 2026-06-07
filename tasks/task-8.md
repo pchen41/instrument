@@ -2,7 +2,42 @@
 
 ## Status
 
-Not started.
+Complete (2026-06-07), 3-way reviewed (Claude/Codex/Gemini, two fix rounds).
+The `recommendation_pr_generation` executor generates an approved instrumentation
+PR through the governed github MCP path. Committed: 25394d4 (executor + merge sync)
++ two review-fix commits. New IO live-verified (get_file_contents read+decode, the
+approval-gated external_write_actions insert, the merge-sync scan); the branch/file/
+PR MCP writes are already proven live (Task 6). A full real generated-PR e2e was
+not fired (needs a main target file + cleanup), but every component is verified.
+
+## Progress Notes
+
+- Flow: 5A approval (`request_approval` action_type `generate_pr` → `decide_approval`
+  approved → `enqueue_generation` → `recommendation_pr_generation` job with
+  trigger_summary.approval_id + target_id=recommendation + target_step_key). The
+  executor (`server/lib/agent-prgen.ts`, IO `_shared/prgen-store.ts`): plan verifies
+  the approval matches THIS rec/step/workspace + is `approved` + has a payload hash,
+  snapshots the target file (MCP get_file_contents); compose_patch generates the
+  full instrumented file via the gateway (`pr_gen_patch.v1`, maxTokens 4000);
+  handoff writes branch → the SINGLE approved file → PR via the github MCP.
+- Governance: each write is an external_write_actions row with approval_id +
+  request_hash = approved_payload_hash; the idempotency key is bound to the approval
+  hash; the approval is re-asserted before EACH write; ONLY the approved baseline
+  file path is ever written (a model/injected extra path is refused). Writes are
+  idempotent (branch already-exists = ok; PR recovered via list_pull_requests; file
+  skipped if the branch already has the content). PR title + commit + body scrubbed.
+- Step lifecycle: handoff leaves the code_pr step `ready` (materializing it if the
+  rec had none — Task 7 instrumentation recs start step-less). Merge sync on the
+  webhook (`markGeneratedPrMerged`, repo-scoped) marks the step `done`
+  (completion_source 'generated_pr_merged') and the rec `accepted` only from
+  `active` once all required steps are done. github_pull_requests is upserted by the
+  Task 6 webhook on `opened`.
+- Schema versions: `pr_gen_patch.v1`. external write kinds: github_create_branch,
+  github_update_file, github_create_pr.
+- Known (lower-tier) limitations: base-branch drift between plan and handoff isn't
+  detected; the steps read-modify-write isn't version-guarded; PrGenMcp resolves the
+  single github integration (single-workspace demo); full file/patch content is kept
+  in server-side (RLS-protected) evidence for resume.
 
 ## Context
 
