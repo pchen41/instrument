@@ -12,7 +12,7 @@ import {
   type RecommendationDetail,
 } from '../../data/reads';
 import { runDeferredAction, type DeferredAction } from '../../data/deferred';
-import { setRecommendationState } from '../../data/actions';
+import { approveAndGenerate, setRecommendationState } from '../../data/actions';
 import type { RecommendationStep } from '../../lib/schemas';
 
 // Card glyph + label driven by the recommendation's category so it reads
@@ -55,6 +55,34 @@ export function Recommendations() {
     [view, notice],
   );
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
+  // Explicit-approval confirm for code_pr generation (Task 8).
+  const [gen, setGen] = useState<{ rec: RecommendationCard; step: RecommendationStep } | null>(null);
+  const [submittingKey, setSubmittingKey] = useState<string | null>(null);
+  const runGenerate = useCallback(
+    async (rec: RecommendationCard, step: RecommendationStep) => {
+      const key = `${rec.id}:${step.key}`;
+      setSubmittingKey(key);
+      try {
+        const res = await approveAndGenerate({
+          targetType: 'recommendation',
+          targetId: rec.id,
+          targetStepKey: step.key,
+          actionType: 'generate_pr',
+          approvalSummary: `Generate an instrumentation PR for "${rec.title}".`,
+          payload: { recommendation_id: rec.id, step_key: step.key, action: 'generate_pr' },
+        });
+        if (res.ok) {
+          notice.show('Generating the pull request…');
+          await view.refetch();
+        } else {
+          notice.show(res.error ?? 'PR generation could not be started.');
+        }
+      } finally {
+        setSubmittingKey(null);
+      }
+    },
+    [notice, view],
+  );
 
   const recs = view.data ?? [];
 
@@ -92,7 +120,9 @@ export function Recommendations() {
               rec={rec}
               onOpen={setDrawer}
               onFire={fire}
+              onGenerate={(r, s) => setGen({ rec: r, step: s })}
               onDismiss={() => changeState(rec.id, 'dismissed')}
+              submittingKey={submittingKey}
             />
           ))}
         </div>
@@ -111,6 +141,27 @@ export function Recommendations() {
       )}
       {drawer && drawer.kind !== 'review' && (
         <StepArtifactDrawer state={drawer} onClose={() => setDrawer(null)} onFire={fire} />
+      )}
+
+      {gen && (
+        <ConfirmDialog
+          icon="pr"
+          title="Generate this pull request?"
+          confirmLabel="Approve & generate"
+          confirmIcon="pr"
+          onConfirm={() => {
+            const g = gen;
+            setGen(null);
+            void runGenerate(g.rec, g.step);
+          }}
+          onCancel={() => setGen(null)}
+          body={
+            <span>
+              Instrument opens a branch, commits the instrumentation change, and opens a pull request on
+              GitHub for your review. Nothing is merged automatically.
+            </span>
+          }
+        />
       )}
 
       {notice.notice && <Toast key={notice.key} message={notice.notice} onDone={notice.clear} />}
@@ -138,12 +189,16 @@ function OpenCard({
   rec,
   onOpen,
   onFire,
+  onGenerate,
   onDismiss,
+  submittingKey,
 }: {
   rec: RecommendationCard;
   onOpen: (d: DrawerState) => void;
   onFire: (a: DeferredAction) => void;
+  onGenerate: (rec: RecommendationCard, step: RecommendationStep) => void;
   onDismiss: () => Promise<void>;
+  submittingKey: string | null;
 }) {
   const kind = KIND[rec.category];
   const steps = [...(rec.steps ?? [])].sort((a, b) => a.order - b.order);
@@ -169,7 +224,14 @@ function OpenCard({
               <Icon name={stepIcon(step)} className="rs-ic" />
               <span className="rs-label">{step.label}</span>
               <span className="rs-action">
-                <StepAction rec={rec} step={step} onOpen={onOpen} onFire={onFire} />
+                <StepAction
+                  rec={rec}
+                  step={step}
+                  onOpen={onOpen}
+                  onFire={onFire}
+                  onGenerate={onGenerate}
+                  submittingKey={submittingKey}
+                />
               </span>
             </li>
           ))}
@@ -291,11 +353,15 @@ function StepAction({
   step,
   onOpen,
   onFire,
+  onGenerate,
+  submittingKey,
 }: {
   rec: RecommendationCard;
   step: RecommendationStep;
   onOpen: (d: DrawerState) => void;
   onFire: (a: DeferredAction) => void;
+  onGenerate: (rec: RecommendationCard, step: RecommendationStep) => void;
+  submittingKey: string | null;
 }) {
   // PR-review steps open straight to the posted comments (a read), regardless of
   // state — there is nothing to approve.
@@ -380,12 +446,36 @@ function StepAction({
     );
   }
 
-  // No artifact yet — generation is a Task 5A mutation.
-  const action: DeferredAction = step.kind === 'code_pr' ? 'generate_recommendation_pr' : 'create_datadog_monitor';
+  // No artifact yet. code_pr runs the real approval + external-write flow (Task 8);
+  // Datadog monitor creation still routes through the deferred notice until its
+  // generation executor ships (Task 9).
+  if (step.kind === 'code_pr') {
+    const isSubmitting = submittingKey === `${rec.id}:${step.key}`;
+    return (
+      <button
+        type="button"
+        className="btn btn-primary btn-sm"
+        onClick={() => onGenerate(rec, step)}
+        disabled={isSubmitting}
+      >
+        {isSubmitting ? (
+          <>
+            <span className="btn-spin" />
+            Starting…
+          </>
+        ) : (
+          <>
+            <Icon name="pr" />
+            Generate PR
+          </>
+        )}
+      </button>
+    );
+  }
   return (
-    <button type="button" className="btn btn-primary btn-sm" onClick={() => onFire(action)}>
-      <Icon name={step.kind === 'code_pr' ? 'pr' : 'bell'} />
-      {step.kind === 'code_pr' ? 'Generate PR' : 'Create'}
+    <button type="button" className="btn btn-primary btn-sm" onClick={() => onFire('create_datadog_monitor')}>
+      <Icon name="bell" />
+      Create
     </button>
   );
 }

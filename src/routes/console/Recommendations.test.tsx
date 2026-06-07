@@ -49,6 +49,14 @@ const fx = vi.hoisted(() => {
         { key: 'pr14-review', order: 0, kind: 'pr_review_record', state: 'done', label: '3 observability comments posted on PR #14' },
       ],
     }),
+    card({
+      id: 'rec-instr',
+      title: 'Add distributed tracing to checkout handler',
+      category: 'instrumentation',
+      steps: [
+        { key: 'generate-pr', order: 0, kind: 'code_pr', state: 'available', label: 'Generate instrumentation PR', target_provider: 'github' },
+      ],
+    }),
   ];
   const archive = [
     card({ id: 'rec-acc', state: 'accepted', title: 'Accepted metric', category: 'instrumentation', steps: [] }),
@@ -71,10 +79,11 @@ vi.mock('../../data/hooks', () => ({
 
 vi.mock('../../data/actions', () => ({
   setRecommendationState: vi.fn(() => Promise.resolve({ ok: true })),
+  approveAndGenerate: vi.fn(() => Promise.resolve({ ok: true })),
 }));
 
 import { Recommendations } from './Recommendations';
-import { setRecommendationState } from '../../data/actions';
+import { approveAndGenerate, setRecommendationState } from '../../data/actions';
 
 describe('Recommendations — step locking + generated artifacts', () => {
   it('locks a dependent step until its prerequisite merges', () => {
@@ -96,6 +105,22 @@ describe('Recommendations — step locking + generated artifacts', () => {
     render(<Recommendations />);
     fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
     expect(setRecommendationState).toHaveBeenCalledWith('rec-multi', 'dismissed');
+  });
+
+  it('runs the approval + generation flow for a code_pr step after explicit confirm', () => {
+    render(<Recommendations />);
+    // The button alone does not write — it asks for explicit approval first.
+    fireEvent.click(screen.getByRole('button', { name: /Generate PR/ }));
+    expect(approveAndGenerate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Approve & generate/ }));
+    expect(approveAndGenerate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetType: 'recommendation',
+        targetId: 'rec-instr',
+        targetStepKey: 'generate-pr',
+        actionType: 'generate_pr',
+      }),
+    );
   });
 });
 

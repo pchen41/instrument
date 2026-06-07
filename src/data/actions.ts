@@ -63,3 +63,62 @@ export function setInvestigationMode(
 ): Promise<ActionOutcome> {
   return invoke({ action: 'set_investigation_mode', workspace_id: workspaceId, mode });
 }
+
+// ---- Approval-gated external writes (Task 8) --------------------------------
+
+export interface ApprovalRequest {
+  targetType: 'recommendation';
+  targetId: string;
+  targetStepKey?: string | null;
+  actionType: 'generate_pr' | 'create_monitor' | 'monitor_change';
+  approvalSummary: string;
+  payload: unknown;
+}
+
+/** Open (or reuse, idempotent) an approval for an external-write operation. */
+export function requestApproval(req: ApprovalRequest): Promise<ActionOutcome> {
+  return invoke({
+    action: 'request_approval',
+    target_type: req.targetType,
+    target_id: req.targetId,
+    target_step_key: req.targetStepKey ?? null,
+    action_type: req.actionType,
+    approval_summary: req.approvalSummary,
+    payload: req.payload,
+  });
+}
+
+/** Approve / reject / revoke an approval; approving re-checks the payload hash. */
+export function decideApproval(
+  approvalId: string,
+  decision: 'approved' | 'rejected' | 'revoked',
+  payload?: unknown,
+): Promise<ActionOutcome> {
+  return invoke({ action: 'decide_approval', approval_id: approvalId, decision, payload });
+}
+
+/** Enqueue the durable generation job for an approved external-write operation. */
+export function enqueueGeneration(approvalId: string): Promise<ActionOutcome> {
+  return invoke({ action: 'enqueue_generation', approval_id: approvalId });
+}
+
+/**
+ * Explicit-approval shortcut behind a single confirm: open the approval, approve
+ * it, then enqueue generation. The server makes each step idempotent — a duplicate
+ * request reuses the active approval and a duplicate enqueue reuses the existing
+ * job — and surfaces any failure (e.g. a stale-payload or transition conflict)
+ * rather than generating without a clean approval. The caller guards against
+ * concurrent double-submit; after enqueue the step advances out of `available`,
+ * so the button is no longer offered.
+ */
+export async function approveAndGenerate(req: ApprovalRequest): Promise<ActionOutcome> {
+  const opened = await requestApproval(req);
+  if (!opened.ok) return opened;
+  const approvalId = opened.data?.approval_id as string | undefined;
+  if (!approvalId) return { ok: false, error: 'The approval could not be opened.' };
+
+  const decided = await decideApproval(approvalId, 'approved', req.payload);
+  if (!decided.ok) return decided;
+
+  return enqueueGeneration(approvalId);
+}

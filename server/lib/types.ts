@@ -129,10 +129,19 @@ export interface IncidentRow {
 
 export type RecommendationState = 'active' | 'accepted' | 'dismissed' | 'outdated';
 
+export interface RecommendationStepRow {
+  key: string;
+  kind: string;
+  state: string;
+  order?: number;
+  label?: string;
+}
+
 export interface RecommendationRow {
   id: string;
   workspace_id: string;
   state: RecommendationState;
+  steps?: RecommendationStepRow[] | null;
   lifecycle_events: { at: string; event: string; detail?: string | null; job_id?: string | null }[];
   dismissed_at?: string | null;
   accepted_at?: string | null;

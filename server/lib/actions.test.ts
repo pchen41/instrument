@@ -151,6 +151,15 @@ describe('approval + generation enqueue', () => {
 
     await handleAction(db, ctx, { action: 'decide_approval', approval_id: approvalId, decision: 'approved', payload });
 
+    // Duplicate decide_approval is idempotent and succeeds when payload matches
+    const dupDecide = await handleAction(db, ctx, { action: 'decide_approval', approval_id: approvalId, decision: 'approved', payload });
+    expect(dupDecide).toMatchObject({ ok: true, state: 'approved' });
+
+    // Duplicate decide_approval throws stale_payload if payload changes
+    await expect(
+      handleAction(db, ctx, { action: 'decide_approval', approval_id: approvalId, decision: 'approved', payload: { branch: 'something-else' } }),
+    ).rejects.toMatchObject({ status: 409, code: 'stale_payload' });
+
     const enq = await handleAction(db, ctx, { action: 'enqueue_generation', approval_id: approvalId });
     expect(enq).toMatchObject({ ok: true, deduped: false });
     expect((await db.getJob(enq.job_id as string))?.job_type).toBe('recommendation_pr_generation');
@@ -184,6 +193,59 @@ describe('approval + generation enqueue', () => {
     await expect(
       handleAction(db, ctx, { action: 'enqueue_generation', approval_id: approvalId }),
     ).rejects.toMatchObject({ status: 409, code: 'not_approved' });
+  });
+
+  it('binds a provided target_step_key to a real, kind-compatible step', async () => {
+    db.seedRecommendation({
+      id: 'rec-step',
+      workspace_id: 'ws-1',
+      state: 'active',
+      steps: [{ key: 'generate-pr', kind: 'code_pr', state: 'available' }],
+    });
+
+    // A forged/unknown step key is rejected.
+    await expect(
+      handleAction(db, ctx, {
+        action: 'request_approval',
+        target_type: 'recommendation',
+        target_id: 'rec-step',
+        target_step_key: 'no-such-step',
+        action_type: 'generate_pr',
+        approval_summary: 'x',
+        payload,
+      }),
+    ).rejects.toMatchObject({ status: 404, code: 'step_not_found' });
+
+    // A real step of an incompatible kind for the action is rejected.
+    db.seedRecommendation({
+      id: 'rec-mon',
+      workspace_id: 'ws-1',
+      state: 'active',
+      steps: [{ key: 'create-monitor', kind: 'datadog_new_monitor', state: 'available' }],
+    });
+    await expect(
+      handleAction(db, ctx, {
+        action: 'request_approval',
+        target_type: 'recommendation',
+        target_id: 'rec-mon',
+        target_step_key: 'create-monitor',
+        action_type: 'generate_pr',
+        approval_summary: 'x',
+        payload,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'step_kind_mismatch' });
+
+    // The matching code_pr step is accepted.
+    const ok = await handleAction(db, ctx, {
+      action: 'request_approval',
+      target_type: 'recommendation',
+      target_id: 'rec-step',
+      target_step_key: 'generate-pr',
+      action_type: 'generate_pr',
+      approval_summary: 'ok',
+      payload,
+    });
+    expect(ok.ok).toBe(true);
   });
 
   it('rejects approvals for a workspace the user is not a member of', async () => {

@@ -75,6 +75,7 @@ export class FakeDb implements JobsDb {
       id: r.id ?? id('rec'),
       workspace_id: r.workspace_id ?? 'ws-1',
       state: r.state ?? 'active',
+      steps: r.steps ?? null,
       lifecycle_events: r.lifecycle_events ?? [],
       dismissed_at: r.dismissed_at ?? null,
       accepted_at: r.accepted_at ?? null,

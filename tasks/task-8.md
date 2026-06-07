@@ -10,6 +10,34 @@ approval-gated external_write_actions insert, the merge-sync scan); the branch/f
 PR MCP writes are already proven live (Task 6). A full real generated-PR e2e was
 not fired (needs a main target file + cleanup), but every component is verified.
 
+### UI wiring follow-up (2026-06-07, 3-way reviewed)
+
+The executor was complete but the **console never invoked it** — the "Generate PR"
+button was a Task 5A deferred stub, and Task 7 instrumentation recs were created with
+ZERO steps so no button rendered. Fixed + 3-way reviewed:
+
+- `scan-store.ts`: instrumentation recs are created (and back-filled on re-scan when
+  step-less) with a single `code_pr` step keyed `generate-pr` — shape matches the
+  executor's materialized step exactly, so the approval's `target_step_key` lines up
+  and `updateStep` finds it instead of materializing a duplicate. A one-off SQL
+  backfill added the step to the two already-deployed step-less recs.
+- `src/data/actions.ts`: `requestApproval` / `decideApproval` / `enqueueGeneration` +
+  an `approveAndGenerate` helper (request → approve → enqueue) behind one confirm.
+- `Recommendations.tsx`: the `code_pr` "Generate PR" button now opens a ConfirmDialog
+  (explicit approval) → `approveAndGenerate(target_step_key=step.key)`; a `submittingKey`
+  guard disables it during the in-flight calls. Datadog monitor creation stays a
+  deferred stub until Task 9.
+- Review hardening: `decideApproval` is now idempotent (same-state re-approve with a
+  matching payload → ok; mismatch → 409 `stale_payload`); `requestApproval` rejects a
+  `target_step_key` that isn't an existing step of the action-compatible kind
+  (`step_not_found` / `step_kind_mismatch`), closing the forged-key materialization gap.
+- Live-verified end-to-end through the deployed `console-actions` as the demo user:
+  request → approve → enqueue created a `recommendation_pr_generation` job with
+  `target_step_key=generate-pr`; the executor accepted the approval binding and reached
+  `get_file_contents`, failing only because that demo rec points at a synthetic file not
+  on main (the same pre-existing "needs a real target file" limitation). Test artifacts
+  cleaned up afterward.
+
 ## Progress Notes
 
 - Flow: 5A approval (`request_approval` action_type `generate_pr` → `decide_approval`

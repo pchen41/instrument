@@ -32,6 +32,12 @@ const codeKey = (jobId: string) => `scan_code:${jobId}`;
 const findingsKey = (jobId: string) => `scan_findings:${jobId}`;
 const LEASE_FREE = '1970-01-01T00:00:00.000Z';
 
+// The single approvable code_pr step an instrumentation rec carries so the console
+// can offer "Generate PR". Key + shape match the Task 8 executor's materialized
+// step (`generate-pr`) exactly, so the approval's target_step_key lines up and the
+// executor's updateStep finds this step instead of materializing a duplicate.
+const generatePrStep = () => [{ key: 'generate-pr', order: 0, kind: 'code_pr', state: 'available', label: 'Generate instrumentation PR', target_provider: 'github' }];
+
 // ---- github MCP changed-code reader ------------------------------------------
 
 export function createScanMcp(admin: Admin): ScanMcp {
@@ -182,14 +188,27 @@ export function createScanStore(admin: Admin): ScanStore {
         confidence: input.severity === 'high' ? 'high' : input.severity === 'low' ? 'low' : 'likely',
         dedupe_fingerprint: input.dedupeFingerprint,
         validated_schema_version: 'recommendation.v1',
+        steps: generatePrStep(),
         last_seen_job_id: input.jobId,
         created_by_model_call_id: input.modelCallId || null,
         updated_at: input.now,
       };
-      const { data: existing, error: selErr } = await db.from('recommendations').select('id').eq('workspace_id', input.workspaceId).eq('dedupe_fingerprint', input.dedupeFingerprint).limit(1).maybeSingle();
+      const { data: existing, error: selErr } = await db.from('recommendations').select('id, steps').eq('workspace_id', input.workspaceId).eq('dedupe_fingerprint', input.dedupeFingerprint).limit(1).maybeSingle();
       if (selErr) throw new JobError({ retryable: true, code: 'recommendation_read_failed', summary: 'Could not read the recommendation.', source: 'worker' });
       if (existing?.id) {
-        const { error } = await db.from('recommendations').update({ last_seen_job_id: input.jobId, updated_at: input.now, title: input.title, rationale: input.rationale, proposed_next_step: input.proposedNextStep }).eq('id', existing.id);
+        const updateFields: Record<string, any> = {
+          last_seen_job_id: input.jobId,
+          updated_at: input.now,
+          title: input.title,
+          rationale: input.rationale,
+          proposed_next_step: input.proposedNextStep,
+        };
+        // If the existing recommendation has no steps (e.g. from Task 7),
+        // populate the code_pr step so the UI can offer "Generate PR".
+        if (!existing.steps || (Array.isArray(existing.steps) && existing.steps.length === 0)) {
+          updateFields.steps = generatePrStep();
+        }
+        const { error } = await db.from('recommendations').update(updateFields).eq('id', existing.id);
         if (error) throw new JobError({ retryable: true, code: 'recommendation_write_failed', summary: 'Could not update the recommendation.', source: 'worker' });
         return { id: existing.id as string, created: false };
       }

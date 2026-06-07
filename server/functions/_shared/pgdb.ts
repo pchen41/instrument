@@ -17,7 +17,7 @@ type Admin = any;
 
 const INCIDENT_COLS =
   'id, workspace_id, incident_state, service_name, investigation_job_id, investigation_start_mode_snapshot, hypotheses, timeline';
-const REC_COLS = 'id, workspace_id, state, lifecycle_events, dismissed_at, accepted_at';
+const REC_COLS = 'id, workspace_id, state, steps, lifecycle_events, dismissed_at, accepted_at';
 const APPROVAL_COLS =
   'id, workspace_id, action_type, target_type, target_id, target_step_key, requested_by, approved_by, state, approval_summary, approved_payload_hash, idempotency_key';
 

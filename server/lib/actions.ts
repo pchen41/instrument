@@ -227,6 +227,16 @@ const GENERATION_JOB_TYPE: Record<string, JobType> = {
   monitor_change: 'datadog_alert_generation',
 };
 
+// action_type → the recommendation step kind it may act on. A provided
+// target_step_key must name an existing step of this kind, so a crafted client
+// can't approve an action against an arbitrary or incompatible step key (the
+// executor would otherwise materialize it).
+const ACTION_STEP_KIND: Record<string, string> = {
+  generate_pr: 'code_pr',
+  create_monitor: 'datadog_new_monitor',
+  monitor_change: 'datadog_monitor_change',
+};
+
 async function requestApproval(
   db: JobsDb,
   ctx: ActionContext,
@@ -238,6 +248,18 @@ async function requestApproval(
   const rec = await db.getRecommendation(req.target_id);
   if (!rec) throw new ActionError(404, 'not_found', 'Approval target not found.');
   await assertMember(db, rec.workspace_id, ctx.userId);
+
+  // Bind the approval to a real, kind-compatible step. The client supplies
+  // target_step_key, so a forged/incompatible key must be rejected here rather
+  // than silently materialized by the executor.
+  if (req.target_step_key) {
+    const step = (rec.steps ?? []).find((s) => s.key === req.target_step_key);
+    if (!step) throw new ActionError(404, 'step_not_found', 'The recommendation has no such step.');
+    const expectedKind = ACTION_STEP_KIND[req.action_type];
+    if (expectedKind && step.kind !== expectedKind) {
+      throw new ActionError(409, 'step_kind_mismatch', `Step "${req.target_step_key}" does not support ${req.action_type}.`);
+    }
+  }
 
   // Idempotent: an existing active approval for the same target+action is reused.
   const active = await db.findActiveApproval(rec.workspace_id, req.target_type, req.target_id, req.action_type);
@@ -269,6 +291,18 @@ async function decideApproval(
   const approval = await db.getApproval(req.approval_id);
   if (!approval) throw new ActionError(404, 'not_found', 'Approval not found.');
   await assertMember(db, approval.workspace_id, ctx.userId);
+
+  // If the approval is already in the target state, treat it as an idempotent no-op,
+  // but still validate the payload if approving.
+  if (approval.state === req.decision) {
+    if (req.decision === 'approved' && req.payload !== undefined) {
+      if (hashPayload(req.payload) !== approval.approved_payload_hash) {
+        throw new ActionError(409, 'stale_payload', 'The approved payload no longer matches the request.');
+      }
+    }
+    return { ok: true, state: req.decision };
+  }
+
   assertApprovalTransition(approval.state, req.decision);
 
   // Approving with a payload re-checks the hash so a payload that changed since
