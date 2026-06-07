@@ -196,3 +196,23 @@ Built the production frontend scaffold, sign-in-only auth, and the console shell
   steps cannot be exercised until a real username/password user is created.
   `requireEmailVerification` is already off, so a created user can sign in
   immediately.
+
+### 2026-06-06 — Deployed to InsForge frontend hosting
+
+- Live URL: **https://m5h8zr7r.insforge.site** (Vercel via
+  `npx @insforge/cli deployments deploy`). Status `READY`; `/` and the SPA
+  fallback (e.g. `/incidents`) both return 200, and the built bundle embeds the
+  InsForge API host (confirming the build-time env injection).
+- Persistent deployment env vars set (browser-safe only): `VITE_INSFORGE_URL`
+  and `VITE_INSFORGE_ANON_KEY` (the anon JWT — **not** the admin `ik_...` key,
+  despite the CLI doc's generic example). Datadog RUM vars left unset → telemetry
+  no-op in the deploy.
+- **Deploy gotcha (for future deploys):** the InsForge deploy CLI auto-excludes
+  `node_modules/.git/dist/build/.next/.env*/.DS_Store/.insforge/*.log` but **not**
+  `services/truefoundry-mcp/.venv` (83 MB Python virtualenv) — deploying the repo
+  root swept it in and failed with `OSS request failed: 413`. Fixed by deploying
+  from a clean frontend-only staging copy (`index.html`, `src/`, `public/`,
+  vite/ts/tailwind/postcss configs, `vercel.json`, `package*.json` → 42 files,
+  360 KB) while running the command from the repo root so the linked project
+  context is still used. If a frontend folder split or a deploy-ignore mechanism
+  lands later, that removes the manual staging step.
