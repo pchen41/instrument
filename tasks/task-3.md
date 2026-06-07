@@ -2,7 +2,14 @@
 
 ## Status
 
-Not started.
+Complete (2026-06-06). Added Zod validation helpers for the 11 jsonb shapes
+(`src/lib/schemas/`), seeded first-slice workflow records as Instrument
+dogfooding itself (the console, the InsForge edge functions/job worker, the
+Render TrueFoundry-MCP server, and provider integrations — repo
+`pchen41/instrument`), and read helpers / documented query shapes
+(`src/data/reads.ts`). Migration `20260607015338_seed-workflow-records.sql`
+applied cleanly. Offline `npm test` (69) and live `npm run verify:reads` (16
+member-JWT read/RLS checks) both pass; `npm run verify:db` still green.
 
 ## Context
 
@@ -94,5 +101,77 @@ Depends on Task 2.
 
 ## Progress Notes
 
-- Update this section with seed data notes, JSON schema/helper locations, and
-  any schema deviations from `docs/ERD.md`.
+- 2026-06-06 — Implemented.
+- **JSON validation helpers** in `src/lib/schemas/` (Zod, per the ERD's "validate
+  in application code, e.g. with Zod"). `index.ts` exposes `COLUMN_SCHEMAS`
+  (a `table.column` → element-schema map) and `validateColumn(column, value)` for
+  all 11 jsonb shapes: `jobs.phases` / `jobs.attempts` / `jobs.audit_events`,
+  `repositories.service_map`, `recommendations.steps` /
+  `recommendations.lifecycle_events`, `incidents.signals` / `timeline` /
+  `hypotheses` / `correlated_changes`, and `ai_model_calls.tool_calls_redacted`.
+  The JSON-vocabulary enums live in `enums.ts`. Reused by edge functions/workers
+  later to validate AI output before write/render.
+- **Read helpers / query shapes** in `src/data/reads.ts`: `listActiveIncidents`,
+  `listResolvedIncidents`, `getIncidentDetail` (incident + investigation job +
+  evidence), `listActiveRecommendations`, `listArchivedRecommendations`
+  (accepted/dismissed/outdated), `getRecommendationDetail` (steps + evidence),
+  `listPrReviewRecommendations`, `getPrReviewRecord` (rec + PR metadata +
+  comments), and the pure `incidentDisplayState` mapper. All go through an
+  authenticated SDK client so RLS scopes results to the workspace.
+- **Seed** (`migrations/20260607015338_seed-workflow-records.sql`, idempotent DO
+  block; no-ops once incidents exist). Content is Instrument observing itself:
+  - Integrations: TrueFoundry → `rate_limited` (drives the reliability incident);
+    GitHub/Datadog → `connected`. Repo `service_map` maps paths to
+    instrument-console / job-worker-tick / github-webhook / datadog-webhook /
+    external-action-executor / instrument-mcp.
+  - 7 incidents: active in every display state — `new` (no job), `investigating`
+    (running + retrying jobs), `complete` (succeeded job), `failed` (terminal
+    failed job) — one auto-started, plus 2 resolved. The marquee one is the PRD
+    reliability proof: job-worker-tick retrying through TrueFoundry 429s, with the
+    retries recorded in `jobs.attempts` and `telemetry_emissions`.
+  - 8 recommendations across `active`/`accepted`/`dismissed`/`outdated` and all
+    three categories, including a multi-step alert rec with a **locked** dependent
+    step, a **generated PR** result in a step (synced as PR #12), a generated
+    **draft Datadog monitor** result in a step, a monitor-change diff, and a
+    `pr_review` rec with 3 **posted** `pr_review_comments` on incoming PR #14.
+  - Supporting rows: jobs (with phases/attempts/audit), `github_pull_requests`,
+    `ai_model_calls` (with redacted MCP tool calls), `approvals`,
+    `external_write_actions` (PR create + draft monitor + 3 review comments),
+    `evidence_items`, `telemetry_emissions`.
+  - **No incident-fix PR generation** is implied (future scope): incidents hold
+    investigation output only (signals/timeline/hypotheses/correlated_changes/
+    evidence), never a generated fix. Generated PR / draft-monitor results live in
+    `recommendations.steps`, not in folded generated-artifact tables.
+- **Tests**:
+  - `src/lib/schemas/schemas.test.ts` — valid + invalid document per jsonb column
+    via `validateColumn` (offline, mirrors the seed shapes).
+  - `src/data/reads.unit.test.ts` — `incidentDisplayState` mapping + list query
+    shapes via a mock client (offline).
+  - `src/data/no-folded-tables.test.ts` — scans `src/` `.from()` calls and the
+    seed migration for any folded/retired table reference (offline).
+  - `npm run verify:reads` (`scripts/verify-reads.mjs`) — live member-JWT test:
+    active incidents cover all four display states, resolved incidents, active
+    recs across categories, archived states, the locked multi-step rec + generated
+    PR #12, the generated draft monitor, the PR #14 review record with 3 posted
+    comments, incident detail (job + evidence), and that an anon non-member reads
+    nothing. Needs `INSTRUMENT_DEMO_PASSWORD` at run time (kept out of git); skips
+    cleanly without it. (db query cannot switch roles, so the live read/RLS check
+    uses the SDK, consistent with Task 2's `verify:rls`.)
+- **No schema deviations** from `docs/ERD.md` — Task 3 added no columns/tables; it
+  only populated jsonb shapes and added app-side validators/read helpers.
+- 2026-06-06 — External review (Codex + Gemini). Both confirmed the schema mapping
+  and full state coverage; Gemini independently validated all live seeded rows
+  against the Zod schemas. Applied hardening from the review:
+  - All jsonb object schemas are now `.strict()` so field-name drift in AI output /
+    future seeds is rejected, not silently stripped.
+  - `recommendationStep.target_provider` widened to the full `integration_provider`
+    enum (was github/datadog only).
+  - `verify-reads.mjs` now asserts an anon/non-member reads zero rows across
+    incidents, recommendations, jobs, pr_review_comments, evidence_items,
+    external_write_actions, and ai_model_calls (was incidents only).
+  - Confirmed all 114 seeded jsonb documents pass the strict schemas (one-off live
+    `validateColumn` run).
+  - Deferred (nit): the step metric field is named `metric_verification_state`;
+    the ERD vocab is `metric_existence_state` and a traceability line calls the
+    field `verification_state`. Nothing consumes it yet — align the name when the
+    Task 4 console reads steps.
