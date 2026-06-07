@@ -38,6 +38,9 @@ Set these in Render. Record secret names only in task notes, never values.
   MCP client sends an `Origin` header.
 - `MAX_TIME_WINDOW_HOURS` - default `6`.
 - `MAX_RESULT_LIMIT` - default `50`.
+- `LOG_LEVEL` - default `INFO`. Render logs include MCP tool start/success/error
+  events and TrueFoundry request start/complete/failure events with redacted
+  payload and response snippets.
 
 For local unauthenticated experiments only, set
 `ALLOW_UNAUTHENTICATED_MCP=true`.

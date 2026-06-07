@@ -38,9 +38,11 @@ class Settings:
     allow_unauthenticated_mcp: bool
     max_time_window_hours: int
     max_result_limit: int
+    host: str
     port: int
     allowed_hosts: list[str]
     allowed_origins: list[str]
+    log_level: str
 
     @property
     def truefoundry_configured(self) -> bool:
@@ -66,7 +68,9 @@ def load_settings() -> Settings:
         allow_unauthenticated_mcp=_bool_env("ALLOW_UNAUTHENTICATED_MCP", False),
         max_time_window_hours=_int_env("MAX_TIME_WINDOW_HOURS", 6),
         max_result_limit=_int_env("MAX_RESULT_LIMIT", 50),
+        host=os.getenv("HOST", "0.0.0.0"),
         port=_int_env("PORT", 8000),
         allowed_hosts=allowed_hosts,
         allowed_origins=_csv_env("MCP_ALLOWED_ORIGINS"),
+        log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
     )

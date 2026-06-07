@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import uvicorn
@@ -14,6 +15,13 @@ from starlette.responses import JSONResponse, Response
 
 from settings import Settings, load_settings
 from tools import register_tools
+
+
+def configure_logging(settings: Settings) -> None:
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level, logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
 
 
 class DemoBearerAuthMiddleware(BaseHTTPMiddleware):
@@ -64,6 +72,7 @@ def create_mcp(settings: Settings) -> FastMCP:
 
 def create_app(settings: Settings | None = None) -> Starlette:
     settings = settings or load_settings()
+    configure_logging(settings)
     mcp = create_mcp(settings)
 
     async def healthz(_: Request) -> JSONResponse:
@@ -88,4 +97,4 @@ app = create_app()
 
 if __name__ == "__main__":
     settings = load_settings()
-    uvicorn.run(app, host="0.0.0.0", port=settings.port)
+    uvicorn.run(app, host=settings.host, port=settings.port)

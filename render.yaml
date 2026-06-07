@@ -23,3 +23,5 @@ services:
         value: "6"
       - key: MAX_RESULT_LIMIT
         value: "50"
+      - key: LOG_LEVEL
+        value: "INFO"
