@@ -6,9 +6,8 @@ import { Segmented } from '../../components/console/Segmented';
 import { ConfirmDialog } from '../../components/console/overlays';
 import { ErrorState, LoadingState, Toast, useTransientNotice } from '../../components/console/feedback';
 import { useIncidentsView, useWorkspaceSettings } from '../../data/hooks';
-import { updateInvestigationStartMode, type IncidentWithState, type InvestigationStartMode } from '../../data/reads';
-import { runDeferredAction } from '../../data/deferred';
-import { useAuth } from '../../auth/AuthProvider';
+import type { IncidentWithState, InvestigationStartMode } from '../../data/reads';
+import { setInvestigationMode, startInvestigation } from '../../data/actions';
 import { formatWhen } from '../../lib/format';
 import { AutoInvestigateMenu } from './AutoInvestigateMenu';
 
@@ -31,8 +30,12 @@ export function Incidents() {
   const rows = view.data ?? [];
 
   const investigate = useCallback(
-    () => notice.show(runDeferredAction('start_investigation').message),
-    [notice],
+    async (incidentId: string) => {
+      const res = await startInvestigation(incidentId);
+      if (res.ok) await view.refetch();
+      else notice.show(res.error ?? 'The investigation could not be started.');
+    },
+    [view, notice],
   );
 
   return (
@@ -45,7 +48,7 @@ export function Incidents() {
           </div>
         </div>
         <div className="head-controls">
-          <StartModeControl />
+          <StartModeControl notify={notice.show} />
           <Segmented
             ariaLabel="Incident filter"
             value={scope}
@@ -77,7 +80,11 @@ export function Incidents() {
       ) : (
         <div className="inc-list">
           {rows.map((row) => (
-            <IncidentRow key={row.incident.id} row={row} onInvestigate={investigate} />
+            <IncidentRow
+              key={row.incident.id}
+              row={row}
+              onInvestigate={() => investigate(row.incident.id)}
+            />
           ))}
         </div>
       )}
@@ -90,8 +97,7 @@ export function Incidents() {
 }
 
 /** Reads the workspace setting and persists changes optimistically. */
-function StartModeControl() {
-  const { user } = useAuth();
+function StartModeControl({ notify }: { notify: (message: string) => void }) {
   const settings = useWorkspaceSettings();
   const [override, setOverride] = useState<InvestigationStartMode | null>(null);
   const [saving, setSaving] = useState(false);
@@ -104,10 +110,11 @@ function StartModeControl() {
       if (!workspaceId || next === mode) return;
       setOverride(next); // optimistic — investigations in flight are untouched
       setSaving(true);
-      const { error } = await updateInvestigationStartMode(workspaceId, next, user?.id ?? null);
+      const res = await setInvestigationMode(workspaceId, next);
       setSaving(false);
-      if (error) {
+      if (!res.ok) {
         setOverride(null); // revert on failure
+        notify(res.error ?? 'The investigation-start setting could not be changed.');
       } else {
         // Re-read, then drop the optimistic override so the server value is the
         // source of truth again (no stale shadow on later changes).
@@ -115,7 +122,7 @@ function StartModeControl() {
         setOverride(null);
       }
     },
-    [workspaceId, mode, user?.id, settings],
+    [workspaceId, mode, settings, notify],
   );
 
   if (!settings.data) return null;

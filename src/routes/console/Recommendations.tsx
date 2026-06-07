@@ -12,6 +12,7 @@ import {
   type RecommendationDetail,
 } from '../../data/reads';
 import { runDeferredAction, type DeferredAction } from '../../data/deferred';
+import { setRecommendationState } from '../../data/actions';
 import type { RecommendationStep } from '../../lib/schemas';
 
 // Card glyph + label driven by the recommendation's category so it reads
@@ -45,6 +46,14 @@ export function Recommendations() {
   const view = useRecommendationsView(scope);
   const notice = useTransientNotice();
   const fire = useCallback((a: DeferredAction) => notice.show(runDeferredAction(a).message), [notice]);
+  const changeState = useCallback(
+    async (recommendationId: string, state: 'dismissed' | 'active') => {
+      const res = await setRecommendationState(recommendationId, state);
+      if (res.ok) await view.refetch();
+      else notice.show(res.error ?? 'The recommendation could not be updated.');
+    },
+    [view, notice],
+  );
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
 
   const recs = view.data ?? [];
@@ -78,7 +87,13 @@ export function Recommendations() {
       ) : scope === 'active' ? (
         <div className="rec-grid">
           {recs.map((rec) => (
-            <OpenCard key={rec.id} rec={rec} onOpen={setDrawer} onFire={fire} />
+            <OpenCard
+              key={rec.id}
+              rec={rec}
+              onOpen={setDrawer}
+              onFire={fire}
+              onDismiss={() => changeState(rec.id, 'dismissed')}
+            />
           ))}
         </div>
       ) : (
@@ -86,7 +101,7 @@ export function Recommendations() {
           {[...recs]
             .sort((a, b) => (ARCH_BADGE[a.state]?.order ?? 9) - (ARCH_BADGE[b.state]?.order ?? 9))
             .map((rec) => (
-              <ArchivedCard key={rec.id} rec={rec} onFire={fire} />
+              <ArchivedCard key={rec.id} rec={rec} onRestore={() => changeState(rec.id, 'active')} />
             ))}
         </div>
       )}
@@ -123,10 +138,12 @@ function OpenCard({
   rec,
   onOpen,
   onFire,
+  onDismiss,
 }: {
   rec: RecommendationCard;
   onOpen: (d: DrawerState) => void;
   onFire: (a: DeferredAction) => void;
+  onDismiss: () => void;
 }) {
   const kind = KIND[rec.category];
   const steps = [...(rec.steps ?? [])].sort((a, b) => a.order - b.order);
@@ -157,7 +174,7 @@ function OpenCard({
           ))}
         </ol>
         <div className="rec-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onFire('dismiss_recommendation')}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onDismiss}>
             Dismiss
           </button>
         </div>
@@ -166,7 +183,7 @@ function OpenCard({
   );
 }
 
-function ArchivedCard({ rec, onFire }: { rec: RecommendationCard; onFire: (a: DeferredAction) => void }) {
+function ArchivedCard({ rec, onRestore }: { rec: RecommendationCard; onRestore: () => void }) {
   const kind = KIND[rec.category];
   const badge = ARCH_BADGE[rec.state];
   return (
@@ -188,7 +205,7 @@ function ArchivedCard({ rec, onFire }: { rec: RecommendationCard; onFire: (a: De
               type="button"
               className="btn btn-ghost btn-sm arch-restore"
               style={{ marginLeft: 'auto' }}
-              onClick={() => onFire('restore_recommendation')}
+              onClick={onRestore}
             >
               <Icon name="undo" />
               Restore

@@ -1,20 +1,15 @@
-// Mutations that depend on the Task 5A action endpoints (start / retry an
-// investigation, dismiss / restore a recommendation, generate a PR, apply a
-// monitor change, mark a PR merged). Task 4 is read + polling + persisted UI
-// state, so these actions are rendered (design-faithful) but their persistence
-// is intentionally deferred: each goes through runDeferredAction, which returns
-// a calm, honest result the UI surfaces instead of silently failing an
-// RLS-blocked write. Task 5A replaces this with real endpoint calls.
+// Mutations that depend on a provider's external-write flow (generate a PR, apply
+// or publish a Datadog monitor change, mark a PR merged, complete a step). These
+// are rendered design-faithfully but route through runDeferredAction — a calm,
+// honest notice — because the real behaviour needs the approval + external-write
+// executor and provider workflows that ship with the GitHub / Datadog integration
+// tasks, not Task 5A.
 //
-// The one console mutation that is NOT deferred is the investigation-start
-// setting — it persists today via updateInvestigationStartMode (Task 2 grants
-// the column-scoped UPDATE), so it does not appear here.
+// Task 5A wired the rest to real `console-actions` endpoints (src/data/actions.ts):
+// start / retry an investigation, dismiss / restore a recommendation, and the
+// investigation-start setting are live and no longer pass through here.
 
 export type DeferredAction =
-  | 'start_investigation'
-  | 'retry_investigation'
-  | 'dismiss_recommendation'
-  | 'restore_recommendation'
   | 'generate_recommendation_pr'
   | 'generate_monitor_change'
   | 'create_datadog_monitor'
@@ -22,10 +17,6 @@ export type DeferredAction =
   | 'complete_step';
 
 const VERB: Record<DeferredAction, string> = {
-  start_investigation: 'Starting an investigation',
-  retry_investigation: 'Retrying the investigation',
-  dismiss_recommendation: 'Dismissing a recommendation',
-  restore_recommendation: 'Restoring a recommendation',
   generate_recommendation_pr: 'Generating a pull request',
   generate_monitor_change: 'Applying a monitor change',
   create_datadog_monitor: 'Publishing a draft monitor',
@@ -40,14 +31,14 @@ export interface DeferredResult {
 }
 
 /**
- * Resolve a deferred action. Today it only produces the notice the console
- * shows; in Task 5A the caller awaits a real endpoint instead. Kept as a single
- * choke point so every "wire me up in 5A" site is greppable.
+ * Resolve a deferred action into the notice the console shows. Kept as a single
+ * choke point so every "wire me up with the provider integration" site is
+ * greppable.
  */
 export function runDeferredAction(action: DeferredAction): DeferredResult {
   return {
     deferred: true,
     action,
-    message: `${VERB[action]} will be enabled when the action endpoints ship (Task 5A).`,
+    message: `${VERB[action]} runs through Instrument's approval and external-write flow, which ships with the provider integration.`,
   };
 }

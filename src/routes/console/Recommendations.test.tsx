@@ -69,7 +69,12 @@ vi.mock('../../data/hooks', () => ({
   }),
 }));
 
+vi.mock('../../data/actions', () => ({
+  setRecommendationState: vi.fn(() => Promise.resolve({ ok: true })),
+}));
+
 import { Recommendations } from './Recommendations';
+import { setRecommendationState } from '../../data/actions';
 
 describe('Recommendations — step locking + generated artifacts', () => {
   it('locks a dependent step until its prerequisite merges', () => {
@@ -87,10 +92,10 @@ describe('Recommendations — step locking + generated artifacts', () => {
     expect(screen.getByRole('button', { name: /View comments/ })).toBeInTheDocument();
   });
 
-  it('surfaces a deferred (Task 5A) notice when dismissing', () => {
+  it('dismisses a recommendation through the real action endpoint', () => {
     render(<Recommendations />);
     fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss' })[0]);
-    expect(screen.getByText(/Task 5A/)).toBeInTheDocument();
+    expect(setRecommendationState).toHaveBeenCalledWith('rec-multi', 'dismissed');
   });
 });
 

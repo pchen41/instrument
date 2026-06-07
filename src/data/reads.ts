@@ -434,30 +434,9 @@ export async function getWorkspaceSettings(
   return { data: (res.data as unknown as WorkspaceSettings | null) ?? null, error: res.error };
 }
 
-/**
- * Persist the investigation-start setting on `workspaces`. This is the one
- * mutation the console performs directly: Task 2 grants `authenticated` a
- * column-scoped UPDATE on investigation_start_mode (+ settings audit columns),
- * so it does not need a Task 5A action endpoint. It only touches the setting —
- * investigations already in flight are unaffected (they read the snapshot taken
- * when they started, not this column).
- */
-export async function updateInvestigationStartMode(
-  workspaceId: string,
-  mode: InvestigationStartMode,
-  settingsUpdatedBy: string | null,
-  client: Client = insforge,
-): Promise<{ error: unknown }> {
-  const res = await client.database
-    .from('workspaces')
-    .update({
-      investigation_start_mode: mode,
-      settings_updated_by: settingsUpdatedBy,
-      settings_updated_at: new Date().toISOString(),
-    })
-    .eq('id', workspaceId);
-  return { error: res.error };
-}
+// The investigation-start setting is persisted through the `console-actions`
+// endpoint (src/data/actions.ts setInvestigationMode), not a direct write, so it
+// goes through the same membership/validation path as every other mutation.
 
 // ---- Integrations health ----------------------------------------------------
 

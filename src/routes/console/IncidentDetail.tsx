@@ -7,7 +7,7 @@ import { ConfirmDialog } from '../../components/console/overlays';
 import { ErrorState, LoadingState, Toast, useTransientNotice } from '../../components/console/feedback';
 import { useIncidentDetail, type IncidentDetailData } from '../../data/hooks';
 import { incidentDisplayState } from '../../data/reads';
-import { runDeferredAction, type DeferredAction } from '../../data/deferred';
+import { retryInvestigation, startInvestigation, type ActionOutcome } from '../../data/actions';
 import { formatClockUTC } from '../../lib/format';
 import type { ConfidenceLevel } from '../../lib/schemas';
 
@@ -21,7 +21,6 @@ export function IncidentDetail() {
   const { incidentId = '' } = useParams();
   const view = useIncidentDetail(incidentId);
   const notice = useTransientNotice();
-  const fire = useCallback((a: DeferredAction) => notice.show(runDeferredAction(a).message), [notice]);
 
   return (
     <div className="content">
@@ -43,7 +42,7 @@ export function IncidentDetail() {
           <p>It may have been resolved or is outside this workspace.</p>
         </div>
       ) : (
-        <Investigation data={view.data} fire={fire} />
+        <Investigation data={view.data} refetch={view.refetch} notify={notice.show} />
       )}
 
       {notice.notice && <Toast key={notice.key} message={notice.notice} onDone={notice.clear} />}
@@ -51,8 +50,26 @@ export function IncidentDetail() {
   );
 }
 
-function Investigation({ data, fire }: { data: IncidentDetailData; fire: (a: DeferredAction) => void }) {
+function Investigation({
+  data,
+  refetch,
+  notify,
+}: {
+  data: IncidentDetailData;
+  refetch: () => Promise<void>;
+  notify: (message: string) => void;
+}) {
   const { incident, job, evidence } = data;
+
+  // Apply a console mutation, then re-read so the durable job state drives the UI.
+  const run = useCallback(
+    async (p: Promise<ActionOutcome>, fallback: string) => {
+      const res = await p;
+      if (res.ok) await refetch();
+      else notify(res.error ?? fallback);
+    },
+    [refetch, notify],
+  );
   const display = incidentDisplayState(incident, job);
   const resolved = incident.incident_state === 'resolved';
   const auto = incident.started_automatically && display !== 'new';
@@ -115,9 +132,20 @@ function Investigation({ data, fire }: { data: IncidentDetailData; fire: (a: Def
             </div>
           )}
 
-          {display === 'failed' && job && <FailedInvestigation incident={incident} job={job} fire={fire} />}
+          {display === 'failed' && job && (
+            <FailedInvestigation
+              incident={incident}
+              job={job}
+              onRetry={() => run(retryInvestigation(job.id), 'The investigation could not be retried.')}
+            />
+          )}
 
-          {display === 'new' && <NotStarted serviceName={incident.service_name} fire={fire} />}
+          {display === 'new' && (
+            <NotStarted
+              serviceName={incident.service_name}
+              onStart={() => run(startInvestigation(incident.id), 'The investigation could not be started.')}
+            />
+          )}
         </div>
 
         {hypotheses.length > 0 && (
@@ -237,11 +265,11 @@ function Investigation({ data, fire }: { data: IncidentDetailData; fire: (a: Def
 function FailedInvestigation({
   incident,
   job,
-  fire,
+  onRetry,
 }: {
   incident: IncidentDetailData['incident'];
   job: NonNullable<IncidentDetailData['job']>;
-  fire: (a: DeferredAction) => void;
+  onRetry: () => void;
 }) {
   const [confirm, setConfirm] = useState(false);
   const phases = job.phases ?? [];
@@ -311,7 +339,7 @@ function FailedInvestigation({
           confirmIcon="undo"
           onConfirm={() => {
             setConfirm(false);
-            fire('retry_investigation');
+            onRetry();
           }}
           onCancel={() => setConfirm(false)}
           body={
@@ -326,7 +354,7 @@ function FailedInvestigation({
   );
 }
 
-function NotStarted({ serviceName, fire }: { serviceName: string | null; fire: (a: DeferredAction) => void }) {
+function NotStarted({ serviceName, onStart }: { serviceName: string | null; onStart: () => void }) {
   const [confirm, setConfirm] = useState(false);
   return (
     <div style={{ marginTop: '16px' }}>
@@ -355,7 +383,7 @@ function NotStarted({ serviceName, fire }: { serviceName: string | null; fire: (
           confirmIcon="search"
           onConfirm={() => {
             setConfirm(false);
-            fire('start_investigation');
+            onStart();
           }}
           onCancel={() => setConfirm(false)}
           body={
