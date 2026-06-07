@@ -33,10 +33,28 @@ ZERO steps so no button rendered. Fixed + 3-way reviewed:
   (`step_not_found` / `step_kind_mismatch`), closing the forged-key materialization gap.
 - Live-verified end-to-end through the deployed `console-actions` as the demo user:
   request → approve → enqueue created a `recommendation_pr_generation` job with
-  `target_step_key=generate-pr`; the executor accepted the approval binding and reached
-  `get_file_contents`, failing only because that demo rec points at a synthetic file not
-  on main (the same pre-existing "needs a real target file" limitation). Test artifacts
-  cleaned up afterward.
+  `target_step_key=generate-pr`; the executor accepted the approval binding and ran all
+  phases.
+
+### Full real generated-PR e2e (2026-06-07) — the long-standing Task 8 gap, now closed
+
+Seeded a real target file `instrument-smoke/checkout.ts` on `main` (created via the
+github MCP `create_or_update_file`, so it's one isolated commit — `3d80d5b` — that does
+NOT push local `f2a909f`). Then drove both demo recs through the approval flow:
+
+- "Add distributed tracing to checkout handler" → **PR #2** (OpenTelemetry span around
+  `checkout`, closed in a `finally`, records exceptions).
+- "Track checkout transaction volume and latency" → **PR #4** (counter metric).
+
+Both steps are now `ready` with `generated_pr` linked; the console shows "View PR #N".
+
+**`parsePr` bug found + fixed (covered by `prgen-store.test.ts`):** the github MCP's
+`create_pull_request` returns `{"id":"...","url":".../pull/<n>"}` with **NO `number`
+field**, so `parsePr` returned null → `github_pr_unparsed`, failing every generation's
+first handoff attempt (it only succeeded on retry via the `list_pull_requests` recovery
+path, which DOES include `number`). Fix: derive the PR number from the URL's trailing
+`/pull/<n>` when the explicit field is absent. Verified live (captured the exact
+response shape) + deterministic unit test. job-worker-tick redeployed with the fix.
 
 ## Progress Notes
 

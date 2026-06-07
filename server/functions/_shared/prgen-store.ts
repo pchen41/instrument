@@ -113,12 +113,21 @@ function parseFileContents(res: { text: string; raw: any }): FileRead | null {
   return { content: text, sha };
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parsePr(text: string): CreatedPr | null {
+export function parsePr(text: string): CreatedPr | null {
   try {
     const j = JSON.parse(text);
-    const n = j?.number ?? j?.pull_request?.number;
+    const url = (j.html_url ?? j.url ?? j?.pull_request?.html_url ?? '') as string;
+    // The github MCP's create_pull_request returns { id, url } with NO `number`
+    // field, so derive the PR number from the URL's trailing /pull/<n>. The
+    // recovery path (list_pull_requests) does include `number`, so both shapes
+    // are covered.
+    let n = j?.number ?? j?.pull_request?.number;
+    if (n == null && url) {
+      const m = /\/pull\/(\d+)/.exec(url);
+      if (m) n = Number(m[1]);
+    }
     if (n == null) return null;
-    return { number: Number(n), url: (j.html_url ?? j.url ?? j?.pull_request?.html_url) ?? '', nodeId: (j.node_id ?? null) as string | null };
+    return { number: Number(n), url, nodeId: (j.node_id ?? null) as string | null };
   } catch {
     return null;
   }
