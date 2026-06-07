@@ -154,13 +154,8 @@ button{font-family:inherit;cursor:pointer;}
 .callout.callout-live i{color:var(--info-ink);}
 .callout.callout-live .ctitle{color:var(--info-ink);}
 
-/* fix-generation row on the investigation card */
-.gen-hint{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-3);line-height:1.45;max-width:60%;}
-.gen-hint i{font-size:15px;color:var(--ink-4);flex-shrink:0;}
+/* Small brand dot used by the recommendation "Generating" pill. */
 .gen-dot{width:8px;height:8px;border-radius:50%;background:var(--brand-600);flex-shrink:0;}
-
-/* "Generating fix" indicator shown on an incident card once a fix is generated */
-.fix-chip{display:inline-flex;align-items:center;gap:7px;margin-right:auto;white-space:nowrap;font-size:12.5px;font-weight:600;color:var(--brand-700);background:var(--brand-tint);padding:5px 11px 5px 9px;border-radius:var(--r-pill);}
 
 .section-label{font:var(--caption);text-transform:uppercase;letter-spacing:.09em;color:var(--ink-3);margin-bottom:12px;}
 
@@ -380,3 +375,85 @@ button{font-family:inherit;cursor:pointer;}
 /* ---- "Started automatically" badge ---- */
 .auto-chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--brand-700);background:var(--brand-tint);padding:3px 9px 3px 7px;border-radius:var(--r-pill);white-space:nowrap;flex-shrink:0;}
 .auto-chip i{font-size:13px;color:var(--brand-600);}
+
+/* ============================================================================
+   Task 4 — server-backed console: failed-job UI, integration health, live
+   polling indicators, loading / error / toast, extra gen-step states.
+   ========================================================================= */
+
+/* Activity: failed investigation (orthogonal to alert state, crit-toned). */
+.activity.activity-failed{color:var(--crit-ink);background:var(--crit-tint);}
+.activity.activity-failed .dot{background:var(--crit);}
+
+/* Extra gen-step states beyond the prototype's pending/active/retrying/done. */
+.gen-step.failed{background:var(--crit-tint);color:var(--crit-ink);}
+.gen-step.failed .gen-mark i{color:var(--crit);}
+.gen-step.failed .gen-tag{color:var(--crit-ink);background:var(--crit-tint);}
+.gen-step.skipped{color:var(--ink-4);}
+.gen-step.skipped .gen-label{text-decoration:line-through;}
+
+/* Loading / error states. */
+.load-state{display:flex;align-items:center;justify-content:center;gap:11px;padding:56px 20px;color:var(--ink-3);font-size:14px;}
+.empty .ei.err{background:var(--warn-tint);color:var(--warn);}
+
+/* Live / updated indicators on a list while work is in flight. */
+.live-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--info-ink);background:var(--info-tint);padding:3px 10px 3px 8px;border-radius:var(--r-pill);white-space:nowrap;}
+.live-pill .dot{width:7px;height:7px;border-radius:50%;background:var(--info);}
+.live-pill.flash{color:var(--ok-ink);background:var(--ok-tint);}
+.live-pill.flash .dot{background:var(--ok);}
+
+/* Failed-investigation card: preserved progress + affected source + retry. */
+.job-failed{margin-top:16px;padding:16px 18px;border-radius:var(--r-md);background:var(--crit-tint);border:1px solid var(--crit-100,rgba(201,42,42,.18));}
+.job-failed .jf-head{display:flex;align-items:flex-start;gap:12px;}
+.job-failed .jf-head > i{font-size:20px;color:var(--crit);flex-shrink:0;margin-top:1px;}
+.job-failed .jf-title{font-weight:650;font-size:15px;color:var(--crit-ink);}
+.job-failed .jf-reason{font-size:13.5px;color:var(--ink-2);line-height:1.55;margin:4px 0 0;}
+.job-failed .jf-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+.job-failed .jf-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-2);background:var(--surface);border:1px solid var(--border);padding:4px 10px;border-radius:var(--r-pill);}
+.job-failed .jf-chip i{font-size:13px;color:var(--ink-4);}
+.job-failed .jf-chip .mono{font-family:var(--font-mono);font-weight:600;}
+.job-failed .jf-progress{margin-top:14px;}
+.job-failed .jf-actions{display:flex;align-items:center;gap:10px;margin-top:14px;}
+.job-failed .jf-noretry{font-size:12.5px;color:var(--ink-3);}
+
+/* Integration health card states (connected / degraded / disconnected /
+   rate_limited / missing_credentials). */
+.intg{flex-wrap:wrap;}
+.intg .istatus{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;padding:4px 11px 4px 9px;border-radius:var(--r-pill);white-space:nowrap;}
+.intg .istatus .dot{width:7px;height:7px;border-radius:50%;}
+.intg .istatus.ok{color:var(--ok-ink);background:var(--ok-tint);}.intg .istatus.ok .dot{background:var(--ok);}
+.intg .istatus.warn{color:var(--warn-ink);background:var(--warn-tint);}.intg .istatus.warn .dot{background:var(--warn);}
+.intg .istatus.crit{color:var(--crit-ink);background:var(--crit-tint);}.intg .istatus.crit .dot{background:var(--crit);}
+.intg .istatus.idle{color:var(--ink-3);background:var(--sunken);}.intg .istatus.idle .dot{background:var(--ink-4);}
+.intg .ierror{flex-basis:100%;margin-top:4px;display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--ink-3);line-height:1.5;}
+.intg .ierror i{font-size:14px;color:var(--warn);flex-shrink:0;margin-top:1px;}
+.intg .ierror .mono{font-family:var(--font-mono);}
+
+/* Generated-artifact link row inside a recommendation step / drawer. */
+.gen-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--brand-700);font-weight:600;}
+.gen-link i{font-size:14px;}
+.rs-meta{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3);white-space:nowrap;}
+.rs-meta .mono{font-family:var(--font-mono);}
+
+/* Draft-monitor result block in the recommendation drawer. */
+.monitor-card{display:flex;align-items:flex-start;gap:11px;background:var(--surface-2);border:1px solid var(--border-faint);border-radius:var(--r-md);padding:13px 15px;}
+.monitor-card > i{font-size:19px;color:var(--brand-600);flex-shrink:0;margin-top:1px;}
+.monitor-card .mc-name{font-size:14px;font-weight:600;}
+.monitor-card .mc-meta{font-size:12.5px;color:var(--ink-3);margin-top:3px;}
+.draft-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--warn-ink);background:var(--warn-tint);padding:2px 8px;border-radius:var(--r-pill);}
+
+/* Deferred-action toast (Task 5A). */
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:70;display:flex;align-items:center;gap:9px;max-width:480px;background:var(--ink);color:var(--surface);font-size:13.5px;line-height:1.45;padding:12px 16px;border-radius:var(--r-md);box-shadow:var(--shadow-lg);animation:toast-in var(--dur) var(--ease);}
+.toast i{font-size:16px;flex-shrink:0;opacity:.85;}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,8px);}to{opacity:1;transform:translate(-50%,0);}}
+@media (prefers-reduced-motion:reduce){.toast{animation:none;}}
+
+/* Evidence list in the investigation rail. */
+.ev-list{display:flex;flex-direction:column;gap:10px;}
+.ev-item{display:flex;gap:10px;align-items:flex-start;}
+.ev-item > i{font-size:15px;color:var(--ink-4);flex-shrink:0;margin-top:1px;}
+.ev-title{font-size:13px;font-weight:600;line-height:1.35;}
+.ev-title a{color:inherit;text-decoration:none;border-bottom:1px solid var(--border-strong);}
+.ev-title a:hover{color:var(--brand-700);}
+.ev-summary{font-size:12.5px;color:var(--ink-3);margin-top:2px;line-height:1.45;}
+.ev-verif{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;color:var(--ink-4);}

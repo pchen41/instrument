@@ -9,6 +9,8 @@ import type {
   IncidentHypothesis,
   IncidentSignal,
   IncidentTimelineEntry,
+  JobAttempt,
+  JobPhase,
   RecommendationLifecycleEvent,
   RecommendationStep,
 } from '../lib/schemas';
@@ -48,17 +50,38 @@ export interface IncidentDetail extends IncidentListItem {
   alert_payload_summary: Record<string, unknown>;
 }
 
+export type JobState = 'queued' | 'running' | 'retrying' | 'failed' | 'succeeded';
+
 export interface JobSummary {
   id: string;
   job_type: string;
-  state: 'queued' | 'running' | 'retrying' | 'failed' | 'succeeded';
+  state: JobState;
   safe_to_retry: boolean;
   attempt_count: number;
-  phases: unknown[];
-  attempts: unknown[];
+  max_attempts: number;
+  phases: JobPhase[];
+  attempts: JobAttempt[];
+  error_code: string | null;
   error_summary: string | null;
+  failure_source: string | null;
+  failure_integration_id: string | null;
+  progress_version: number;
+  started_at: string | null;
+  completed_at: string | null;
   updated_at: string;
 }
+
+/** Job states that mean work is still in flight (drives polling + the live UI). */
+export const ACTIVE_JOB_STATES: readonly JobState[] = ['queued', 'running', 'retrying'];
+export function isActiveJobState(state: JobState | null | undefined): boolean {
+  return !!state && ACTIVE_JOB_STATES.includes(state);
+}
+
+// One column list reused by every job read so detail + list see the same shape.
+const JOB_SUMMARY_COLUMNS =
+  'id, job_type, state, safe_to_retry, attempt_count, max_attempts, phases, attempts, ' +
+  'error_code, error_summary, failure_source, failure_integration_id, progress_version, ' +
+  'started_at, completed_at, updated_at';
 
 export interface EvidenceItem {
   id: string;
@@ -157,7 +180,7 @@ export async function getIncidentDetail(
   if (incident.investigation_job_id) {
     const jobRes = await client.database
       .from('jobs')
-      .select('id, job_type, state, safe_to_retry, attempt_count, phases, attempts, error_summary, updated_at')
+      .select(JOB_SUMMARY_COLUMNS)
       .eq('id', incident.investigation_job_id)
       .maybeSingle();
     if (jobRes.error) return { data: null, error: jobRes.error };
@@ -176,6 +199,54 @@ export async function getIncidentDetail(
     data: { incident, job, evidence: (evidenceRes.data as unknown as EvidenceItem[]) ?? [] },
     error: null,
   };
+}
+
+/** Investigation jobs by id, in one `.in()` read (used to map list display states). */
+export async function getJobsByIds(
+  ids: string[],
+  client: Client = insforge,
+): Promise<{ data: JobSummary[]; error: unknown }> {
+  const unique = [...new Set(ids)].filter(Boolean);
+  if (unique.length === 0) return { data: [], error: null };
+  const res = await client.database.from('jobs').select(JOB_SUMMARY_COLUMNS).in('id', unique);
+  return { data: (res.data as unknown as JobSummary[]) ?? [], error: res.error };
+}
+
+/** An incident row paired with its investigation job and the derived display state. */
+export interface IncidentWithState {
+  incident: IncidentListItem;
+  job: JobSummary | null;
+  display: IncidentDisplayState;
+}
+
+/**
+ * Load an incidents list (active or resolved) already joined to investigation
+ * job state, so the list renders the same durable display state the detail view
+ * shows. Two reads — incidents, then jobs `.in(ids)` — keep it RLS-scoped and
+ * avoid ambiguous PostgREST embedding across the several incident->jobs FKs.
+ */
+export async function loadIncidentsView(
+  scope: 'active' | 'resolved',
+  client: Client = insforge,
+): Promise<{ data: IncidentWithState[]; error: unknown }> {
+  const listRes = await (scope === 'active'
+    ? listActiveIncidents(client)
+    : listResolvedIncidents(client));
+  if (listRes.error) return { data: [], error: listRes.error };
+  const incidents = (listRes.data as unknown as IncidentListItem[]) ?? [];
+
+  const jobIds = incidents.map((i) => i.investigation_job_id).filter((id): id is string => !!id);
+  const jobsRes = await getJobsByIds(jobIds, client);
+  if (jobsRes.error) return { data: [], error: jobsRes.error };
+  const jobsById = new Map(jobsRes.data.map((j) => [j.id, j]));
+
+  const data = incidents.map((incident) => {
+    const job = incident.investigation_job_id
+      ? jobsById.get(incident.investigation_job_id) ?? null
+      : null;
+    return { incident, job, display: incidentDisplayState(incident, job) };
+  });
+  return { data, error: null };
 }
 
 // ---- Recommendations --------------------------------------------------------
@@ -199,6 +270,42 @@ export function listArchivedRecommendations(client: Client = insforge) {
     .select(RECOMMENDATION_LIST_COLUMNS)
     .in('state', ARCHIVED_RECOMMENDATION_STATES as unknown as string[])
     .order('updated_at', { ascending: false });
+}
+
+// Columns the recommendation cards render inline (the list cards show steps with
+// their generated artifacts, so `steps` and `rationale` come back with the list).
+const RECOMMENDATION_CARD_COLUMNS =
+  'id, title, category, state, service_name, confidence, proposed_next_step, ' +
+  'rationale, steps, outdated_reason, updated_at';
+
+export interface RecommendationCard extends RecommendationListItem {
+  rationale: string;
+  steps: RecommendationStep[];
+  outdated_reason: string | null;
+}
+
+/** Active recommendations with steps, for the Open tab cards. */
+export async function loadActiveRecommendations(
+  client: Client = insforge,
+): Promise<{ data: RecommendationCard[]; error: unknown }> {
+  const res = await client.database
+    .from('recommendations')
+    .select(RECOMMENDATION_CARD_COLUMNS)
+    .eq('state', 'active')
+    .order('updated_at', { ascending: false });
+  return { data: (res.data as unknown as RecommendationCard[]) ?? [], error: res.error };
+}
+
+/** Archived recommendations (accepted / dismissed / outdated) for the Archive tab. */
+export async function loadArchivedRecommendations(
+  client: Client = insforge,
+): Promise<{ data: RecommendationCard[]; error: unknown }> {
+  const res = await client.database
+    .from('recommendations')
+    .select(RECOMMENDATION_CARD_COLUMNS)
+    .in('state', ARCHIVED_RECOMMENDATION_STATES as unknown as string[])
+    .order('updated_at', { ascending: false });
+  return { data: (res.data as unknown as RecommendationCard[]) ?? [], error: res.error };
 }
 
 /**
@@ -300,4 +407,82 @@ export function incidentDisplayState(
   if (job.state === 'succeeded') return 'complete';
   if (job.state === 'failed') return 'failed';
   return 'investigating';
+}
+
+// ---- Workspace settings (investigation-start mode) --------------------------
+
+export type InvestigationStartMode = 'manual' | 'auto' | 'smart';
+
+export interface WorkspaceSettings {
+  id: string;
+  slug: string;
+  name: string;
+  investigation_start_mode: InvestigationStartMode;
+  updated_at: string;
+}
+
+/** The caller's workspace (single workspace in the first slice; RLS-scoped). */
+export async function getWorkspaceSettings(
+  client: Client = insforge,
+): Promise<{ data: WorkspaceSettings | null; error: unknown }> {
+  const res = await client.database
+    .from('workspaces')
+    .select('id, slug, name, investigation_start_mode, updated_at')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return { data: (res.data as unknown as WorkspaceSettings | null) ?? null, error: res.error };
+}
+
+/**
+ * Persist the investigation-start setting on `workspaces`. This is the one
+ * mutation the console performs directly: Task 2 grants `authenticated` a
+ * column-scoped UPDATE on investigation_start_mode (+ settings audit columns),
+ * so it does not need a Task 5A action endpoint. It only touches the setting —
+ * investigations already in flight are unaffected (they read the snapshot taken
+ * when they started, not this column).
+ */
+export async function updateInvestigationStartMode(
+  workspaceId: string,
+  mode: InvestigationStartMode,
+  settingsUpdatedBy: string | null,
+  client: Client = insforge,
+): Promise<{ error: unknown }> {
+  const res = await client.database
+    .from('workspaces')
+    .update({
+      investigation_start_mode: mode,
+      settings_updated_by: settingsUpdatedBy,
+      settings_updated_at: new Date().toISOString(),
+    })
+    .eq('id', workspaceId);
+  return { error: res.error };
+}
+
+// ---- Integrations health ----------------------------------------------------
+
+export type IntegrationProvider = 'github' | 'datadog' | 'truefoundry';
+export type IntegrationStatus =
+  | 'connected'
+  | 'disconnected'
+  | 'degraded'
+  | 'rate_limited'
+  | 'missing_credentials';
+
+export interface IntegrationHealth {
+  id: string;
+  provider: IntegrationProvider;
+  status: IntegrationStatus;
+  display_name: string;
+  last_checked_at: string | null;
+  last_error_code: string | null;
+  last_error_summary: string | null;
+}
+
+/** Integration health for the workspace (RLS-scoped), provider order stable. */
+export async function listIntegrations(client: Client = insforge) {
+  return client.database
+    .from('integrations')
+    .select('id, provider, status, display_name, last_checked_at, last_error_code, last_error_summary')
+    .order('provider', { ascending: true });
 }

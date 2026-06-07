@@ -5,6 +5,7 @@ import { RequireAuth } from './auth/RequireAuth';
 import { SignIn } from './routes/SignIn';
 import { ConsoleLayout } from './routes/console/ConsoleLayout';
 import { Incidents } from './routes/console/Incidents';
+import { IncidentDetail } from './routes/console/IncidentDetail';
 import { Recommendations } from './routes/console/Recommendations';
 import { Integrations } from './routes/console/Integrations';
 import { telemetry } from './lib/telemetry';
@@ -32,6 +33,7 @@ export function App() {
           }
         >
           <Route path="/incidents" element={<Incidents />} />
+          <Route path="/incidents/:incidentId" element={<IncidentDetail />} />
           <Route path="/recommendations" element={<Recommendations />} />
           <Route path="/integrations" element={<Integrations />} />
         </Route>

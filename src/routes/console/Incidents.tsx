@@ -1,30 +1,195 @@
-import { EmptyState } from '../../components/EmptyState';
+import { useCallback, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Icon } from '../../components/Icon';
+import { Activity, AutoBadge, Pill, RULE_COLOR } from '../../components/console/indicators';
+import { Segmented } from '../../components/console/Segmented';
+import { ConfirmDialog } from '../../components/console/overlays';
+import { ErrorState, LoadingState, Toast, useTransientNotice } from '../../components/console/feedback';
+import { useChangeFlash, useIncidentsView, useWorkspaceSettings } from '../../data/hooks';
+import { updateInvestigationStartMode, type IncidentWithState, type InvestigationStartMode } from '../../data/reads';
+import { runDeferredAction } from '../../data/deferred';
+import { useAuth } from '../../auth/AuthProvider';
+import { formatWhen } from '../../lib/format';
+import { AutoInvestigateMenu } from './AutoInvestigateMenu';
 
 /**
- * Incidents section. Server-backed incident reads, the investigation lifecycle,
- * and the live investigation view arrive in later tasks (4, 10, 11); the
- * scaffold renders an empty container.
+ * Incidents section. Server-backed: each row's lifecycle marker is derived from
+ * durable investigation-job state (no job → New, queued/running/retrying →
+ * Investigating, succeeded → Investigation complete, failed → Investigation
+ * failed), so a refresh resumes the same state without re-running anything. The
+ * list polls while any investigation is in flight.
  *
- * NOTE: The prototype's incident "Generate fix" PR workflow is intentionally
- * NOT present here. PR generation is future scope (PRD/ERD), so no
- * "Generate fix" action is exposed as an active demo action in Task 1.
+ * The prototype's incident "Generate fix" PR workflow is intentionally absent —
+ * PR generation from an incident is future scope (PRD/ERD); investigations only
+ * read and propose a cause.
  */
 export function Incidents() {
+  const [scope, setScope] = useState<'active' | 'resolved'>('active');
+  const view = useIncidentsView(scope);
+  const flash = useChangeFlash(view.lastUpdatedAt);
+  const notice = useTransientNotice();
+
+  const rows = view.data ?? [];
+  const investigating = rows.some((r) => r.display === 'investigating');
+
+  const investigate = useCallback(
+    () => notice.show(runDeferredAction('start_investigation').message),
+    [notice],
+  );
+
   return (
     <div className="content narrow">
       <div className="page-head">
         <div>
           <h1>Incidents</h1>
           <div className="sub">
-            Alerts relayed from your sources, with Instrument's investigation
-            attached.
+            Alerts relayed from your sources, with Instrument's read-only investigation attached.
           </div>
         </div>
+        <div className="head-controls">
+          <StartModeControl />
+          {investigating && (
+            <span className={'live-pill' + (flash ? ' flash' : '')} aria-live="polite">
+              <span className="dot" />
+              {flash ? 'Updated' : 'Live'}
+            </span>
+          )}
+          <Segmented
+            ariaLabel="Incident filter"
+            value={scope}
+            onChange={setScope}
+            options={[
+              { id: 'active', label: 'Active', icon: 'signal' },
+              { id: 'resolved', label: 'Resolved', icon: 'check-circle' },
+            ]}
+          />
+        </div>
       </div>
-      <EmptyState icon="signal" title="No incidents yet">
-        When a connected source relays a firing alert, the incident and
-        Instrument's read-only investigation will appear here.
-      </EmptyState>
+
+      {view.loading ? (
+        <LoadingState label="Loading incidents…" />
+      ) : view.error ? (
+        <ErrorState message="The incident feed could not be loaded." onRetry={view.refetch} />
+      ) : rows.length === 0 ? (
+        <div className="empty">
+          <div className="ei">
+            <Icon name="check-circle" />
+          </div>
+          <h3>{scope === 'active' ? 'All quiet' : 'No resolved incidents'}</h3>
+          <p>
+            {scope === 'active'
+              ? 'No alerts firing right now. Instrument keeps watching every connected service and surfaces anything worth attention.'
+              : 'Resolved incidents will be kept here once an alert clears.'}
+          </p>
+        </div>
+      ) : (
+        <div className="inc-list">
+          {rows.map((row) => (
+            <IncidentRow key={row.incident.id} row={row} onInvestigate={investigate} />
+          ))}
+        </div>
+      )}
+
+      {notice.notice && (
+        <Toast key={notice.key} message={notice.notice} onDone={notice.clear} />
+      )}
     </div>
+  );
+}
+
+/** Reads the workspace setting and persists changes optimistically. */
+function StartModeControl() {
+  const { user } = useAuth();
+  const settings = useWorkspaceSettings();
+  const [override, setOverride] = useState<InvestigationStartMode | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const mode = override ?? settings.data?.investigation_start_mode ?? 'manual';
+  const workspaceId = settings.data?.id;
+
+  const onChange = useCallback(
+    async (next: InvestigationStartMode) => {
+      if (!workspaceId || next === mode) return;
+      setOverride(next); // optimistic — investigations in flight are untouched
+      setSaving(true);
+      const { error } = await updateInvestigationStartMode(workspaceId, next, user?.id ?? null);
+      setSaving(false);
+      if (error) {
+        setOverride(null); // revert on failure
+      } else {
+        // Re-read, then drop the optimistic override so the server value is the
+        // source of truth again (no stale shadow on later changes).
+        await settings.refetch();
+        setOverride(null);
+      }
+    },
+    [workspaceId, mode, user?.id, settings],
+  );
+
+  if (!settings.data) return null;
+  return <AutoInvestigateMenu value={mode} onChange={onChange} saving={saving} />;
+}
+
+function IncidentRow({ row, onInvestigate }: { row: IncidentWithState; onInvestigate: () => void }) {
+  const { incident, display } = row;
+  const [confirm, setConfirm] = useState(false);
+  const resolved = incident.incident_state === 'resolved';
+  const auto = incident.started_automatically && display !== 'new';
+
+  return (
+    <article className="inc">
+      <span className="rule" style={{ background: RULE_COLOR[incident.alert_state] }} />
+      <div className="ibody">
+        <div className="itop">
+          {resolved ? <Pill alert={incident.alert_state} /> : <Activity kind={display} />}
+          {auto && <AutoBadge />}
+          <span className="itime">
+            <span className="mono">{incident.service_name ?? 'service'}</span>
+            {' · '}
+            {formatWhen(resolved ? incident.resolved_at : incident.started_at)}
+          </span>
+        </div>
+        <h3>{incident.title}</h3>
+        {display === 'failed' && (
+          <p className="idesc" style={{ color: 'var(--crit-ink)' }}>
+            <Icon name="warning" style={{ verticalAlign: '-2px', marginRight: '6px' }} />
+            The investigation failed. Open it to see the preserved progress and retry.
+          </p>
+        )}
+        <div className="ifoot">
+          {display === 'new' ? (
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setConfirm(true)}>
+              <Icon name="search" />
+              Investigate
+            </button>
+          ) : (
+            <Link className="btn btn-secondary btn-sm" to={`/incidents/${incident.id}`}>
+              <Icon name="eye" />
+              View investigation
+            </Link>
+          )}
+        </div>
+      </div>
+      {confirm && (
+        <ConfirmDialog
+          icon="search"
+          title="Start investigation?"
+          confirmLabel="Investigate"
+          confirmIcon="search"
+          onConfirm={() => {
+            setConfirm(false);
+            onInvestigate();
+          }}
+          onCancel={() => setConfirm(false)}
+          body={
+            <span>
+              Instrument will pull traces, recent deploys, and logs for{' '}
+              <span className="code">{incident.service_name ?? 'this service'}</span> and correlate
+              them to propose a cause. It only reads — nothing in your systems changes.
+            </span>
+          }
+        />
+      )}
+    </article>
   );
 }

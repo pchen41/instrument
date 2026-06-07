@@ -51,4 +51,6 @@ export const incidentRootCauseType = z.enum(['code', 'runtime_config', 'upstream
 
 // Reused typed-column enums that also appear inside jsonb documents.
 export const confidenceLevel = z.enum(['high', 'likely', 'low']);
+export type ConfidenceLevel = z.infer<typeof confidenceLevel>;
 export const integrationProvider = z.enum(['github', 'datadog', 'truefoundry']);
+export type IntegrationProviderName = z.infer<typeof integrationProvider>;
