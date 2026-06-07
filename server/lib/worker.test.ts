@@ -176,3 +176,63 @@ describe('runTick', () => {
     expect(untouched?.state).toBe('running'); // null lease → never claimed
   });
 });
+
+describe('reliability telemetry hook (Task 5D)', () => {
+  it('emits a retry signal with routing fields after a retryable failure', async () => {
+    const clock = fixedClock();
+    const db = new FakeDb();
+    const job = dueJob(db, clock, {
+      failure_integration_id: 'int-tf',
+      trigger_summary: { simulate: { fail_phase: 'gather_signals', mode: 'retryable', error_code: 'rate_limited', failure_source: 'truefoundry' }, last_trace_id: 'tr-1', last_request_id: 'rq-1' },
+    });
+    const signals: any[] = [];
+
+    const res = await runTick(db, { ...opts(clock), emitJobTelemetry: async (s) => { signals.push(s); } });
+
+    expect(res.retrying).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toMatchObject({
+      kind: 'retry',
+      workspaceId: job.workspace_id,
+      jobId: job.id,
+      jobType: 'incident_investigation',
+      attempt: 1,
+      integrationId: 'int-tf',
+      source: 'truefoundry',
+      traceId: 'tr-1',
+      requestId: 'rq-1',
+    });
+    expect(signals[0].error.code).toBe('rate_limited');
+  });
+
+  it('emits an error signal on terminal failure and nothing on success', async () => {
+    const clock = fixedClock();
+    const db = new FakeDb();
+    const failJob = dueJob(db, clock, {
+      trigger_summary: { simulate: { fail_phase: 'gather_signals', mode: 'terminal', error_code: 'fatal', failure_source: 'github' } },
+    });
+    const okJob = dueJob(db, clock);
+    const signals: any[] = [];
+
+    await runTick(db, { ...opts(clock), maxJobs: 5, emitJobTelemetry: async (s) => { signals.push(s); } });
+
+    const kinds = signals.map((s) => s.kind);
+    expect(kinds).toEqual(['error']); // the failing job emitted; the clean job did not
+    expect(signals[0]).toMatchObject({ kind: 'error', jobId: failJob.id, source: 'github' });
+    expect(signals.some((s) => s.jobId === okJob.id)).toBe(false);
+  });
+
+  it('a throwing telemetry hook never disturbs the recorded job state', async () => {
+    const clock = fixedClock();
+    const db = new FakeDb();
+    const job = dueJob(db, clock, {
+      trigger_summary: { simulate: { fail_phase: 'gather_signals', mode: 'terminal', error_code: 'fatal' } },
+    });
+
+    const res = await runTick(db, { ...opts(clock), emitJobTelemetry: async () => { throw new Error('datadog down'); } });
+
+    expect(res.failed).toBe(1);
+    const after = await db.getJob(job.id);
+    expect(after?.state).toBe('failed'); // durable state intact despite the throw
+  });
+});

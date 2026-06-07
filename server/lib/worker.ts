@@ -1,7 +1,8 @@
 import type { PhaseExecutor } from './agent';
 import type { JobsDb } from './db';
 import { mergePhases, planFor } from './phases';
-import { classifyError, decideAfterFailure, JobError, resolvePolicy } from './retry';
+import { classifyError, type ClassifiedError, decideAfterFailure, JobError, resolvePolicy } from './retry';
+import type { JobFailureSignal } from './telemetry';
 import { addSeconds, isoSeconds, LEASE_FREE, sleep, type Clock } from './time';
 import type { JobAttempt, JobAuditEvent, JobPhase, JobRow, SimulateConfig } from './types';
 
@@ -33,6 +34,14 @@ export interface RunTickOptions {
    * Unset (5A default) processes the whole job in one invocation.
    */
   maxPhasesPerTick?: number;
+  /**
+   * Reliability telemetry hook (Task 5D). Called best-effort AFTER a retry/error
+   * state write commits, so the worker emits `instrument.job.retry` /
+   * `instrument.job.error` to Datadog + the telemetry_emissions audit row. Must
+   * never throw back into the state machine — the worker swallows any error. A
+   * no-op when unset (e.g. 5A tests). The Deno edge supplies the real emitter.
+   */
+  emitJobTelemetry?: (signal: JobFailureSignal) => Promise<void>;
 }
 
 export interface TickResult {
@@ -328,6 +337,7 @@ async function finishFailure(
       error_summary: error.summary,
       failure_source: error.source,
     });
+    await emitTelemetry(opts, job, 'retry', attempt, error);
     return 'retrying';
   }
 
@@ -356,7 +366,42 @@ async function finishFailure(
     error_summary: error.summary,
     failure_source: error.source,
   });
+  await emitTelemetry(opts, job, 'error', attempt, error);
   return 'failed';
+}
+
+/**
+ * Best-effort reliability emission after a retry/terminal write has committed.
+ * Wrapped so a telemetry failure (Datadog down, store hiccup) can never undo or
+ * block the job's recorded state — the durable engine is the source of truth; the
+ * Datadog signal is downstream. trace/request IDs are forwarded when the job
+ * carries them (the provider workflow tasks stash them in trigger_summary).
+ */
+async function emitTelemetry(
+  opts: RunTickOptions,
+  job: JobRow,
+  kind: 'retry' | 'error',
+  attempt: number,
+  error: ClassifiedError,
+): Promise<void> {
+  if (!opts.emitJobTelemetry) return;
+  const ts = job.trigger_summary as { last_trace_id?: string; last_request_id?: string } | undefined;
+  try {
+    await opts.emitJobTelemetry({
+      kind,
+      workspaceId: job.workspace_id,
+      jobId: job.id,
+      jobType: job.job_type,
+      attempt,
+      error,
+      integrationId: job.failure_integration_id ?? null,
+      source: error.source,
+      traceId: ts?.last_trace_id ?? null,
+      requestId: ts?.last_request_id ?? null,
+    });
+  } catch {
+    /* telemetry is downstream of durable state; never let it disturb the engine */
+  }
 }
 
 /** Engine failure injection (Task 5A has no real providers — see SimulateConfig). */

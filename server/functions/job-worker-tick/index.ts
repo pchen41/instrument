@@ -18,8 +18,11 @@ import { createAdminClient } from 'npm:@insforge/sdk';
 import { json, preflight } from '../_shared/http.ts';
 import { createPgDb } from '../_shared/pgdb.ts';
 import { createGateway, createScriptedToolHost, createWorkStore } from '../_shared/agent-runtime.ts';
+import { createDatadogClient } from '../_shared/datadog-client.ts';
+import { createJobTelemetryEmitter } from '../_shared/telemetry-store.ts';
 import { makeInvestigationExecutor } from '../../lib/agent.ts';
 import { runTick } from '../../lib/worker.ts';
+import { createConsoleSink, createInstrumentation } from '../../lib/instrumentation.ts';
 import { systemClock } from '../../lib/time.ts';
 
 // deno-lint-ignore no-explicit-any
@@ -63,7 +66,18 @@ export default async function (req: Request): Promise<Response> {
     store: createWorkStore(admin),
   });
 
+  // Task 5D: reliability emitter (Datadog metric+event + telemetry_emissions) and
+  // broad worker instrumentation. The Datadog client is a mock sink when
+  // DATADOG_API_KEY is unset, so a credential-free tick still records audit rows.
+  const datadog = createDatadogClient();
+  const emitJobTelemetry = createJobTelemetryEmitter(admin, datadog);
+  const instrument = createInstrumentation(
+    { service: datadog.service, environment: datadog.environment, enabled: true },
+    createConsoleSink(),
+  ).child({ path: 'worker' });
+
   try {
+    const endSpan = instrument.span('worker.tick', { datadog: datadog.enabled });
     const result = await runTick(db, {
       workerId: `tick-${crypto.randomUUID()}`,
       clock: systemClock,
@@ -71,7 +85,10 @@ export default async function (req: Request): Promise<Response> {
       phaseDelayMs,
       maxPhasesPerTick,
       executePhase,
+      emitJobTelemetry,
     });
+    endSpan({ ...result });
+    instrument.metric('instrument.worker.tick.claimed', result.claimed, { retrying: result.retrying, failed: result.failed });
     return json({ ok: true, ...result });
   } catch {
     // Never echo a raw error (it can carry provider/internal detail) to the

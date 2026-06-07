@@ -8,6 +8,8 @@ import { createAdminClient, createClient } from 'npm:@insforge/sdk';
 import { json, preflight } from '../_shared/http.ts';
 import { createPgDb } from '../_shared/pgdb.ts';
 import { ActionError, handleAction } from '../../lib/actions.ts';
+import { createDatadogClient } from '../_shared/datadog-client.ts';
+import { createJobTelemetryEmitter } from '../_shared/telemetry-store.ts';
 import { runTick } from '../../lib/worker.ts';
 import { systemClock } from '../../lib/time.ts';
 
@@ -48,19 +50,23 @@ export default async function (req: Request): Promise<Response> {
   }
   if (!body?.action) return json({ error: 'missing_action' }, 400);
 
-  const db = createPgDb(createAdminClient({ baseUrl, apiKey }));
+  const admin = createAdminClient({ baseUrl, apiKey });
+  const db = createPgDb(admin);
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await handleAction(db, { userId, clock: systemClock }, body as any);
     if (ENQUEUES.has(body.action)) {
       // Process the just-enqueued job inline (same admin client, no network hop)
       // so the console sees it move; the ~1-min cron is the catch-up + retry path.
+      // Task 5D: an inline failure emits reliability telemetry too, so the proof
+      // doesn't depend on which tick (inline vs cron) happened to process the job.
       try {
         await runTick(db, {
           workerId: `inline-${crypto.randomUUID().slice(0, 8)}`,
           clock: systemClock,
           maxJobs: 5,
           phaseDelayMs: 120,
+          emitJobTelemetry: createJobTelemetryEmitter(admin, createDatadogClient()),
         });
       } catch {
         /* the scheduled tick will pick the job up */

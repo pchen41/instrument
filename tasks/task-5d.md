@@ -2,7 +2,7 @@
 
 ## Status
 
-Not started.
+Complete (2026-06-06).
 
 ## Context
 
@@ -95,6 +95,113 @@ Depends on Tasks 0, 2, 5A, 5B, and 5C.
 
 ## Progress Notes
 
-- Update this section with Datadog instrumentation utilities, telemetry path,
-  metric/event names, required tags, health-check behavior, and any provider
-  caveats.
+### Build (2026-06-06)
+
+Extends the 5B/5C runtime-agnostic-core + Deno-edge split. Pure libs are unit-
+tested under Vitest and bundled into the edge functions by build-functions.mjs.
+
+**Shared instrumentation (`server/lib/instrumentation.ts`)** — the broad app-
+telemetry surface: `createInstrumentation({service, environment, enabled}, sink)`
+returns `log/metric/span/child`. `child(attrs)` binds stable redacted attributes
+(service, env, workflow, job_type, integration, request_id, trace_id) so every
+backend path (server fn, worker, webhook, provider client, model/MCP, UI read,
+write executor) emits a consistent structured record. **No-op when disabled or
+sink-less** (local/test never breaks). Every attribute is run through
+`redactAttributes` (reuses `redaction.ts`): secret-named keys and secret-shaped
+values are masked, numbers pass through, nested blobs are bounded+scrubbed. Sinks:
+`createConsoleSink` (structured JSON to stdout → InsForge log stream the
+observability MCP reads = the documented local/mock sink) and `createMemorySink`
+(tests). Per the ERD, broad logs/metrics/traces go here, NOT to telemetry_emissions.
+
+**Reliability telemetry (`server/lib/telemetry.ts`)** — the two stable signals.
+`buildEmission(ctx, signal)` produces the audit-row fields + the Datadog metric
+and event payloads. `emitReliabilitySignal(deps, ctx, signal)` orchestrates
+reserve → submit-once → finish with idempotency. Never throws on a Datadog error
+(records `failed` + a redacted code instead); the worker also wraps it.
+
+- **Metric/event names:** `instrument.job.retry`, `instrument.job.error` (PRD OBS-7).
+- **Routing tags (low-cardinality, on the metric + audit row):** `service`,
+  `env`, `workflow` (stable name via `WORKFLOW_BY_JOB_TYPE`), `job_type`,
+  `integration` (failure source: truefoundry/datadog/github/worker), `error_code`.
+- **Context tags (audit row + the event, NOT the metric):** `trace_id`,
+  `request_id` when available — kept off the metric to bound custom-metric
+  cardinality; they ride the (low-volume) event so the investigation can pivot to
+  TrueFoundry evidence. **No raw job id is ever a Datadog tag** (job_id is a real
+  telemetry_emissions column only); enforced by tests + the live smoke.
+- **Idempotency:** key = `${jobId}:attempt-${attempt}`; the table's unique
+  `(workspace_id, metric_name, idempotency_key)` collapses a re-emitted attempt
+  onto the existing row. If that row already reached `succeeded`, Datadog is
+  skipped entirely → `emission_state = skipped_duplicate` result.
+
+**Telemetry path (HTTP, Edge-suitable — no UDP/dogstatsd agent):**
+`server/functions/_shared/datadog-client.ts` → **Metrics v2** intake
+`POST https://api.us5.datadoghq.com/api/v2/series` (type 1 = count, interval 60)
+and **Events v1** `POST .../api/v1/events`, header `DD-API-KEY`, 10s abort.
+Mock sink (no submit) when `DATADOG_API_KEY` is absent. Non-2xx → short
+`datadog_http_<status>` code, body dropped (no token/payload leak).
+`server/functions/_shared/telemetry-store.ts` writes telemetry_emissions, resolves
+the source `integration_id` per workspace/provider, and composes the
+`emitJobTelemetry` hook the worker injects.
+
+**Worker wiring:** `worker.ts finishFailure` calls `emitJobTelemetry` best-effort
+*after* the retry/terminal state write commits — a telemetry failure can never
+disturb durable job state (unit-tested). Wired into both the scheduled
+`job-worker-tick` and the inline `console-actions` tick, plus broad worker
+instrumentation (`worker.tick` span + `instrument.worker.tick.claimed` metric).
+
+**Integration health (`server/lib/integration-health.ts`):**
+`assessIntegrationHealth(input)` → `integrations.status` enum
+(`connected | degraded | rate_limited | missing_credentials`; `disconnected` is a
+lifecycle state, not inferred) from credential presence, MCP registration, recent
+provider failures, and our own telemetry submission failures. Precedence:
+missing_credentials > rate_limited > degraded > connected. Diagnostics
+(`last_error_code/summary`) are redacted.
+
+### Reliability-validation monitor (preconfigured OUTSIDE Instrument)
+
+Per ERD (the reliability monitor is provisioned manually, not via the draft-
+monitor flow), paste one of these on **us5**. They match the emitted names/tags
+exactly:
+
+- **Metric monitor (primary — the threshold signal):**
+  `sum(last_5m):sum:instrument.job.retry{service:instrument,env:production,integration:truefoundry}.as_count() + sum:instrument.job.error{service:instrument,env:production,integration:truefoundry}.as_count() >= 1`
+  grouped `by {workflow,integration,error_code}`. For the forced TrueFoundry
+  rate-limit proof, `integration:truefoundry` (and optionally
+  `error_code:rate_limited`) routes it to the configured service incident.
+- **Event monitor (alternative / for human context in the incident):**
+  `events("source:instrument tags:(service:instrument env:production integration:truefoundry)").rollup("count").by("workflow").last("5m") >= 1`
+
+When the monitor fires it creates/updates the Datadog incident, which Instrument
+ingests via the Datadog alert webhook and investigates — the trace_id/request_id
+on the event lead the investigation to the TrueFoundry evidence (no pre-wired job
+pointer; ERD).
+
+### Verification
+
+- Tests: `telemetry` (12), `instrumentation` (6), `integration-health` (7),
+  `worker` reliability-hook (3) — full suite **193 passing**, `tsc` clean, bundle
+  green. Covers required routing tags + trace/request IDs, no-op-without-config,
+  mocked-HTTP submit-once + idempotent skip, Datadog failure recording, and all
+  four health states.
+- **Live smoke vs us5 + dev DB** (vite-node, real telemetry-store + real Datadog
+  client): retry + terminal + duplicate signals — Datadog accepted (2xx), rows
+  persisted `succeeded` with resolved integration_id and routing/context tags, the
+  duplicate skipped, **12/12, all rows cleaned up**.
+- **Deployed end-to-end:** enqueued a forced terminal TrueFoundry failure, drove
+  the deployed `job-worker-tick`; the live worker wrote
+  `instrument.job.error` (`emission_state=succeeded`, Datadog 2xx, integration
+  resolved, no job-id leak) — proving the secret pickup + full wiring. Test job +
+  row cleaned up.
+
+### Caveats / forward hooks
+
+- `DATADOG_API_KEY` + `DATADOG_SITE=us5.datadoghq.com` set as InsForge secrets;
+  both functions redeployed. `DD_SERVICE` defaults `instrument`, `DD_ENV` defaults
+  `production`.
+- Submission needs only the Datadog **API key**; creating the monitor needs an
+  **Application key** (not configured) — hence the monitor is documented for manual
+  paste, matching the ERD's "preconfigured outside Instrument".
+- trace_id/request_id are emitted "when available" — the worker forwards
+  `trigger_summary.last_trace_id/last_request_id`; the provider workflow tasks
+  (6/7/9/11/12) stash those from their model/MCP calls so reliability emissions
+  carry the live TrueFoundry trace.
