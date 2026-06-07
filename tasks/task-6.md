@@ -2,7 +2,13 @@
 
 ## Status
 
-Not started.
+Complete (2026-06-07). Proven end-to-end live against a real PR on
+`pchen41/instrument`: a `pull_request` webhook is verified + recorded, the worker
+reads the diff through the github MCP, the TrueFoundry gateway analyzes it, and
+exactly-once scoped inline comments post to the PR; cross-revision dedupe holds;
+closing the PR archives the recommendation. Built in three committed slices
+(beca9c8 ingestion, 5e3c7a3 analysis, 7ca771d lifecycle + live-smoke hardening),
+each three-way reviewed (Claude/Codex/Gemini). Full suite green.
 
 ## Context
 
@@ -78,4 +84,32 @@ console but is not required for the backend webhook/commenting implementation.
 
 ## Progress Notes
 
-- Update this section with webhook URL, fixture names, schema versions, and any GitHub/MCP caveats.
+- Webhook URL: `https://m5h8zr7r.us-east.insforge.app/functions/github-webhook`
+  (the API host, not `*.functions.insforge.app`). Created on `pchen41/instrument`
+  via the PAT (hook id 637650749), subscribed to `pull_request` + `push`
+  (`push` is recorded + ignored until Task 7). Secret = `GITHUB_WEBHOOK_SECRET`
+  (InsForge secret + gitignored CONFIG.md). The CONFIG.md PAT has Webhooks:RW but
+  NOT Contents:RW — branch/file/PR writes go through the github MCP gateway
+  credential (which Task 8 also uses), not the raw PAT.
+- Architecture: pure libs `server/lib/github-webhook.ts` (verify/parse/redact/keys),
+  `pr-review.ts` (findings schema + fingerprints + prompt), `agent-pr.ts`
+  (fetch_diff→analyze→compose PhaseExecutor); Deno IO `_shared/github-webhook-store.ts`,
+  `_shared/mcp-client.ts` (MCP Streamable-HTTP JSON-RPC), `_shared/pr-review-store.ts`.
+  Dispatched by `_shared/executors.ts` into the worker tick.
+- Schema versions: `pr_review_findings.v1` (model output), `pr_review_recommendation.v1`.
+- Exactly-once: compose CLAIMS the posted `pr_review_comments` row by semantic
+  fingerprint (partial-unique `(pull_request_id, semantic_fingerprint) WHERE
+  status='posted'`) BEFORE the github MCP write; a marker (`<!-- instrument:pr-review -->`)
+  reconciles the submit→commit crash window on resume.
+- **Model caveats (live-discovered):** the gateway model `instrument/instrument`
+  is `gemini-3.5-flash`, a REASONING model — needs `max_tokens` ~3000 (most of the
+  budget is hidden reasoning_tokens) and `temperature: 0`, or the JSON truncates.
+  It rewords `issue_type`/`fix_summary` between runs, so the semantic fingerprint
+  uses file + code anchor + a CANONICAL issue kind (`issueKind()` buckets
+  synonyms) — anchor-only would collapse two real gaps on one line; free-text
+  issue_type would defeat cross-revision dedupe.
+- Known limitations: dedupe is one comment per (file, anchor, issue kind) — two
+  gaps that share all three collapse. A reopen-after-close + push can leave a
+  duplicate physical GitHub comment (the prior comment can't be deleted via the
+  allowlisted MCP tools); the recommendation lifecycle is corrected (reopen
+  reactivates). Smoke PR #1 left closed with accumulated test comments.
