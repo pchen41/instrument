@@ -335,6 +335,10 @@ export default async function (req: Request): Promise<Response> {
     const isLifecycle = isLifecycleAction(action);
     if (isLifecycle) {
       await store.outdatePrReviewRecommendation(workspaceId, parsed.repo.fullName, parsed.pr.number, pullRequestId, prLifecycleReason(parsed.pr.merged), now);
+      // Task 8: a merged GENERATED PR completes its recommendation step.
+      if (parsed.pr.merged) {
+        await store.markGeneratedPrMerged(workspaceId, parsed.pr.number, now);
+      }
     } else if (action === 'reopened') {
       // Re-opening un-archives the recommendation (a re-analysis job is also enqueued above).
       await store.reactivatePrReviewRecommendation(workspaceId, parsed.repo.fullName, parsed.pr.number, now);

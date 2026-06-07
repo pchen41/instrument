@@ -301,6 +301,35 @@ export function createGithubWebhookStore(admin: Admin) {
     },
 
     /**
+     * Sync a merged GENERATED PR (Task 8): find the recommendation whose code_pr
+     * step generated this PR number, mark that step `done`
+     * (completion_source 'generated_pr_merged'), and mark the recommendation
+     * `accepted` only once every required step is done. Idempotent + a no-op if no
+     * step generated this PR (a normal PR merge). Separate from review-rec
+     * outdating — a merged PR can hit both independently.
+     */
+    async markGeneratedPrMerged(workspaceId: string, prNumber: number, now: string): Promise<boolean> {
+      // Fetch candidate recs (only instrumentation/alert generate PRs) and scan in
+      // code — a nested-jsonb containment query isn't reliable through PostgREST here.
+      const { data: candidates, error } = await db.from('recommendations').select('id, steps, state').eq('workspace_id', workspaceId).in('category', ['instrumentation', 'alert']);
+      if (error) throw error;
+      const data = (candidates ?? []).find((r: { steps?: unknown }) => Array.isArray(r.steps) && (r.steps as Record<string, any>[]).some((s) => s?.generated_pr?.number === prNumber));
+      if (!data?.id) return false;
+      const steps = (Array.isArray(data.steps) ? (data.steps as Record<string, any>[]) : []).map((s) =>
+        s?.generated_pr?.number === prNumber && s?.state !== 'done' ? { ...s, state: 'done', completion_source: 'generated_pr_merged' } : s,
+      );
+      const allRequiredDone = steps.every((s) => s?.state === 'done' || s?.required === false);
+      const patch: Record<string, unknown> = { steps, updated_at: now };
+      if (allRequiredDone && data.state !== 'accepted') {
+        patch.state = 'accepted';
+        patch.accepted_at = now;
+      }
+      const { error: upErr } = await db.from('recommendations').update(patch).eq('id', data.id);
+      if (upErr) throw upErr;
+      return true;
+    },
+
+    /**
      * A reopened PR un-archives its review recommendation (idempotent; only an
      * `outdated` rec is reactivated). Comments stay `outdated`; a re-analysis on the
      * reopened head posts fresh ones. (A prior physical GitHub comment can't be
