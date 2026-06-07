@@ -2,7 +2,7 @@
 
 ## Status
 
-Not started.
+Not started (scaffold). Pre-flight readiness verified 2026-06-06 — see Progress Notes.
 
 ## Context
 
@@ -57,3 +57,49 @@ The design reference is under `design/project/`. The primary console prototype i
 ## Progress Notes
 
 - Update this section with commands run, test results, and any deviations from the design prototype.
+
+### 2026-06-06 — Pre-flight readiness check (scaffold not yet started)
+
+Assessment: Task 1 is ready to implement. It is greenfield frontend scaffolding and
+does **not** depend on Task 2/3 — the three console sections render empty states for
+now. No production app scaffold exists yet (no root `package.json`).
+
+Verified ready:
+- **InsForge project linked & reachable**: `instrument`
+  (id `016142f5-59b5-40a1-a86d-d40e7c2d482f`), app key `m5h8zr7r`, region `us-east`,
+  base URL `https://m5h8zr7r.us-east.insforge.app`. Checked with
+  `npx @insforge/cli current` / `metadata`.
+- **Design assets present**: `design/project/` — console prototype (`console/*.jsx`,
+  `console/app.css`), auth prototype (`auth.jsx`, `auth.css`), tokens
+  (`assets/colors_and_type.css`), logos/SVGs under `assets/`, Phosphor-style icon
+  reference in `assets/icons.js`. Production app should use `@phosphor-icons/react`.
+- **Stack to use** (per ERD): Vite + React + TypeScript + Tailwind CSS 3.4 +
+  `@insforge/sdk` + `@phosphor-icons/react`.
+- **`.env.*` is gitignored** (`.gitignore` covers `.env` / `.env.*`, keeps
+  `.env.example`).
+
+Config change applied:
+- **Email verification turned OFF.** Was `require_email_verification = true` with SMTP
+  disabled (which would strand normally-signed-up users). Flipped to `false` via
+  `insforge.toml` + `npx @insforge/cli config apply` (no skips; confirmed via
+  `metadata`). The new repo-root `insforge.toml` is non-secret declarative config and
+  is safe to commit. SMTP remains disabled — fine for the sign-in-only demo.
+
+Open items / what's needed before sign-in can be verified end-to-end:
+- **Demo login user — pending (owner: user).** Only `anon@example.com` exists today and
+  it is an *anonymous* user (`email_verified=false`, no password) — not usable for
+  username/password sign-in. User said they will create a real demo user later. Until
+  then, the scaffold + sign-in UI can be built and unit-tested, but the manual
+  "sign in with the configured demo user" step cannot be exercised.
+- **Browser-safe frontend env (`.env.local`) — not created yet.** Needs
+  `VITE_INSFORGE_URL=https://m5h8zr7r.us-east.insforge.app` and
+  `VITE_INSFORGE_ANON_KEY=<browser-safe anon key>`. The anon key is browser-safe but
+  was not exposed by CLI `metadata`; retrieve it from the InsForge dashboard
+  (API keys) when wiring the SDK. SDK client is `createClient({ baseUrl, anonKey })`.
+  **Do not** put the admin `api_key` (`ik_...`) or any provider secret in frontend env.
+- **Datadog RUM — optional, no setup required.** Telemetry wrapper must be a no-op when
+  browser-safe RUM config is absent. RUM client values only; never Datadog API/app keys.
+
+Heads-up (not Task 1): `docs/CONFIG.md` is untracked, holds live secrets (Datadog key,
+TrueFoundry PAT, GitHub PAT), and is **not** in `.gitignore` (only `.env*` is).
+CLAUDE.md says do not commit it — recommend adding `docs/CONFIG.md` to `.gitignore`.

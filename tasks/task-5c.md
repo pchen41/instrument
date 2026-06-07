@@ -2,7 +2,7 @@
 
 ## Status
 
-Not started.
+In progress.
 
 ## Context
 
@@ -106,3 +106,18 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
   names only. Local helper tests pass with `python3 -m unittest discover -s
   tests` from the service directory. Live Render deploy and TrueFoundry MCP
   Gateway registration are still pending.
+- 2026-06-06: TrueFoundry observability MCP server is created and verified for
+  the demo. Public Render base URL is `https://instrument-9z6j.onrender.com`;
+  MCP endpoint is `https://instrument-9z6j.onrender.com/mcp`; health endpoint is
+  `https://instrument-9z6j.onrender.com/healthz`. TrueFoundry control-plane URL
+  for observability APIs is `https://peterc.truefoundry.cloud`; configure this
+  as `TFY_CONTROL_PLANE_URL` in Render. TrueFoundry MCP Gateway can list the
+  server tools. A local live MCP invocation of `query_truefoundry_mcp_metrics`
+  against the control plane succeeded and returned MCP metrics grouped by
+  `method` for `tools/list`, `initialize`, and `tools/call`. Logging now records
+  redacted MCP tool starts/success/errors and TrueFoundry request
+  start/complete/failure details. Remaining Task 5C work: shared AI
+  Gateway/Agent API helpers, `ai_model_calls` persistence, streamed tool-call
+  summary persistence, cited `evidence_items`, structured-output validation,
+  GitHub/Datadog MCP verification, and writing non-secret MCP config into
+  `integrations.config` once the app schema path is ready.

@@ -127,3 +127,11 @@ demo path blocks the validation workflow.
 - Update this section with TrueFoundry MCP verification details, Datadog monitor
   setup, reset command, rate-limit control, and any external provisioning still
   required.
+- 2026-06-06: The Task 5C demo Instrument observability MCP server exists and is
+  usable as the MCP foundation for later reliability validation hardening. It is
+  a Render-hosted Python/FastMCP service at
+  `https://instrument-9z6j.onrender.com/mcp`, backed by TrueFoundry control
+  plane `https://peterc.truefoundry.cloud`. Verified tools include
+  `query_truefoundry_mcp_metrics` returning live MCP metrics for recent
+  `tools/list`, `initialize`, and `tools/call` traffic. Task 12 should harden
+  this existing server rather than introducing a new MCP service.

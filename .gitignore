@@ -73,6 +73,9 @@ web_modules/
 .env.*
 !.env.example
 
+# Local secrets/config — not for version control (see CLAUDE.md)
+docs/CONFIG.md
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

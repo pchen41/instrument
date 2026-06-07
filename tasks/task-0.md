@@ -74,3 +74,13 @@ Read `AGENTS.md`, `docs/PRD.md`, and `docs/ERD.md` before starting. Use the
 
 - Update this section with redacted readiness status, provider setup notes, and
   unresolved provisioning blockers.
+- 2026-06-06: Instrument observability MCP server has been created for the demo.
+  Service code lives under `services/truefoundry-mcp/`; Render service base URL
+  is `https://instrument-9z6j.onrender.com`; MCP endpoint is
+  `https://instrument-9z6j.onrender.com/mcp`; health endpoint is
+  `https://instrument-9z6j.onrender.com/healthz`. Configure Render with
+  `TFY_CONTROL_PLANE_URL=https://peterc.truefoundry.cloud`, `TFY_API_TOKEN`,
+  optional `TFY_DATA_ROUTING_DESTINATION`, optional
+  `TFY_TRACING_PROJECT_FQN`, `MCP_AUTH_TOKEN`, and
+  `MCP_ALLOWED_HOSTS=instrument-9z6j.onrender.com`. No raw secret values were
+  recorded here.
