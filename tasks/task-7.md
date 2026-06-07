@@ -2,7 +2,21 @@
 
 ## Status
 
-Not started.
+Core complete + proven live (2026-06-07), one acceptance criterion remaining.
+Two committed slices: b895470 (push ingestion → proactive_scan enqueue with
+cooldown/coalescing) and 126f6a2 (proactive_scan executor → instrumentation
+recommendations). Proven end-to-end live: a manually-enqueued scan of a real
+commit produced 2 gateway-generated instrumentation recommendations
+(`recommendations`, category `instrumentation`), deduped by a stable
+dedupe_fingerprint; the push→enqueue/coalesce IO + the get_commit MCP read +
+recommendation insert/dedupe were verified against the live dev DB.
+
+**Remaining (not yet built):** the outdating side of lifecycle management — marking
+a prior recommendation `outdated` (with `outdated_reason`) when a later scan shows
+the code/monitor context that justified it has changed or been removed. The
+create/update/dedupe + active-view path is done; the invalidation path is not.
+Also not yet done: a real primary-branch (main) push has not been fired (the live
+scan was enqueued directly to avoid pushing to main), and the 3-way code review.
 
 ## Context
 
