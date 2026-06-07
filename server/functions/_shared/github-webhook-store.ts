@@ -308,10 +308,14 @@ export function createGithubWebhookStore(admin: Admin) {
      * step generated this PR (a normal PR merge). Separate from review-rec
      * outdating — a merged PR can hit both independently.
      */
-    async markGeneratedPrMerged(workspaceId: string, prNumber: number, now: string): Promise<boolean> {
+    async markGeneratedPrMerged(workspaceId: string, repositoryId: string | null, prNumber: number, now: string): Promise<boolean> {
       // Fetch candidate recs (only instrumentation/alert generate PRs) and scan in
       // code — a nested-jsonb containment query isn't reliable through PostgREST here.
-      const { data: candidates, error } = await db.from('recommendations').select('id, steps, state').eq('workspace_id', workspaceId).in('category', ['instrumentation', 'alert']);
+      // Scope to the repository: a PR number is repo-local, so the same number in
+      // another repo must not match a different recommendation.
+      let q = db.from('recommendations').select('id, steps, state').eq('workspace_id', workspaceId).in('category', ['instrumentation', 'alert']);
+      if (repositoryId) q = q.eq('repository_id', repositoryId);
+      const { data: candidates, error } = await q;
       if (error) throw error;
       const data = (candidates ?? []).find((r: { steps?: unknown }) => Array.isArray(r.steps) && (r.steps as Record<string, any>[]).some((s) => s?.generated_pr?.number === prNumber));
       if (!data?.id) return false;

@@ -168,9 +168,20 @@ export function createPrGenStore(admin: Admin): PrGenStore {
 
   return {
     async loadPlan(ctx: PrGenJobContext): Promise<PrGenPlan | null> {
-      const { data: approval, error: aErr } = await db.from('approvals').select('state, approved_payload_hash').eq('id', ctx.approvalId).maybeSingle();
+      const { data: approval, error: aErr } = await db.from('approvals').select('state, approved_payload_hash, action_type, target_type, target_id, target_step_key, workspace_id').eq('id', ctx.approvalId).maybeSingle();
       if (aErr) throw new JobError({ retryable: true, code: 'approval_read_failed', summary: 'Could not read the approval.', source: 'worker' });
       if (!approval) return null;
+      // Governance: the approval must actually authorize THIS PR-generation for THIS
+      // recommendation/step in THIS workspace — never act on a mismatched approval id.
+      if (
+        approval.action_type !== 'generate_pr' ||
+        approval.target_type !== 'recommendation' ||
+        approval.target_id !== ctx.recommendationId ||
+        (approval.target_step_key ?? null) !== ctx.stepKey ||
+        approval.workspace_id !== ctx.workspaceId
+      ) {
+        throw new JobError({ retryable: false, code: 'approval_mismatch', summary: 'The approval does not authorize PR generation for this recommendation step.', source: 'worker' });
+      }
       const { data: rec, error: rErr } = await db.from('recommendations').select('title, rationale, proposed_next_step, affected_code_path, repository_id').eq('id', ctx.recommendationId).maybeSingle();
       if (rErr) throw new JobError({ retryable: true, code: 'recommendation_read_failed', summary: 'Could not read the recommendation.', source: 'worker' });
       if (!rec) return null;

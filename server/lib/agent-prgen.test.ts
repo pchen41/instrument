@@ -88,9 +88,11 @@ describe('compose_patch', () => {
 });
 
 describe('handoff', () => {
+  const baseline = { path: 'src/checkout.ts', content: 'export function handleCheckout(){}', sha: 'b1' };
+
   it('creates branch + file + PR exactly once and links the generated PR on the step', async () => {
     const mcp = fakeMcp();
-    const { store, events } = fakeStore({ patch: validPatch() });
+    const { store, events } = fakeStore({ patch: validPatch(), baseline });
     await makePrGenExecutor(deps(mcp, store))({ job: job(), phaseKey: 'handoff', attempt: 1 });
     expect([mcp.branches, mcp.files, mcp.prs]).toEqual([1, 1, 1]);
     expect(events.inserted).toEqual(['github_create_branch', 'github_update_file', 'github_create_pr']);
@@ -101,7 +103,7 @@ describe('handoff', () => {
 
   it('does not re-create writes that already succeeded (idempotent resume)', async () => {
     const mcp = fakeMcp();
-    const { store } = fakeStore({ patch: validPatch() });
+    const { store } = fakeStore({ patch: validPatch(), baseline });
     await makePrGenExecutor(deps(mcp, store))({ job: job(), phaseKey: 'handoff', attempt: 1 });
     // second run (resume): all writes already succeeded → no new GitHub calls
     await makePrGenExecutor(deps(mcp, store))({ job: job(), phaseKey: 'handoff', attempt: 2 });
@@ -113,6 +115,16 @@ describe('handoff', () => {
     const { store, events } = fakeStore({ patch: { modelCallId: 'mc', validationStatus: 'invalid', patch: null } });
     await makePrGenExecutor(deps(mcp, store))({ job: job(), phaseKey: 'handoff', attempt: 1 });
     expect([mcp.branches, mcp.files, mcp.prs]).toEqual([0, 0, 0]);
+    expect(events.stepStates).toContain('failed');
+  });
+
+  it('refuses to write a path the patch returns that is NOT the approved target file', async () => {
+    const mcp = fakeMcp();
+    // valid patch but for a DIFFERENT file than the approved baseline
+    const evil: LoadedPatch = { modelCallId: 'mc', validationStatus: 'valid', patch: { files: [{ path: '.github/workflows/evil.yml', content: 'x' }], pr_title: 't', pr_summary: 's' } };
+    const { store, events } = fakeStore({ patch: evil, baseline });
+    await makePrGenExecutor(deps(mcp, store))({ job: job(), phaseKey: 'handoff', attempt: 1 });
+    expect([mcp.branches, mcp.files, mcp.prs]).toEqual([0, 0, 0]); // nothing written
     expect(events.stepStates).toContain('failed');
   });
 });

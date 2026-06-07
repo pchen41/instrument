@@ -8,6 +8,7 @@
 // branch/commit/PR. The generated PR step is left `ready` (not `done` — done lands
 // only when the github webhook reports the PR merged, Task 6's lifecycle branch).
 import type { PhaseExecCtx, PhaseExecutor } from './agent';
+import { scrubSecrets } from './redaction';
 import { type AgentInvoker, type ModelCallStore, type RunModelCallOutcome, runModelCall } from './model-call';
 import {
   type PrGenPatch,
@@ -188,30 +189,49 @@ async function handoff(deps: PrGenDeps, ctx: PrGenJobContext, jobId: string, now
     return;
   }
   const patch = loaded.patch;
+  // GOVERNANCE: only ever write the SINGLE approved target file (the recommendation's
+  // affected file). A model (or prompt injection) returning extra/other paths is
+  // ignored — we write exactly the baseline path, nothing else.
+  const baseline = await deps.store.loadFileBaseline(jobId);
+  if (!baseline) throw new JobError({ retryable: true, code: 'prgen_baseline_unavailable', summary: 'The target file baseline was not available.', source: 'worker' });
+  const targetFile = patch.files.find((f) => f.path === baseline.path);
+  if (!targetFile) {
+    await deps.store.setStepState(ctx.recommendationId, ctx.stepKey, 'failed', now().toISOString());
+    return;
+  }
   const branch = prGenBranchName(ctx.recommendationId, ctx.stepKey);
   const requestHash = p.approvedPayloadHash; // ALL writes for this approval share its hash (ERD)
+  // Bind the idempotency keys to the approval hash so a DIFFERENT approval (new
+  // hash) for the same step can't reuse an old approval's write rows.
+  const hk = (k: string) => `${k}:${requestHash.slice(0, 12)}`;
+  const commitMsg = scrubSecrets(`instrument: ${targetFile.path}`).slice(0, 72);
+  // Re-assert the approval is still approved+unrevoked before each provider write.
+  const assertApproved = async () => {
+    const fresh = await deps.store.loadPlan(ctx);
+    if (!fresh || fresh.approvalState !== 'approved') throw new JobError({ retryable: false, code: 'approval_revoked', summary: 'The approval is no longer approved — stopping further writes.', source: 'worker' });
+  };
 
   // 1. branch
-  await execWrite(deps, ctx, jobId, branchWriteKey(ctx.recommendationId, ctx.stepKey), 'github_create_branch', `${p.repo.fullName} ${branch}`, requestHash, { branch }, now, async () => {
+  await execWrite(deps, ctx, jobId, hk(branchWriteKey(ctx.recommendationId, ctx.stepKey)), 'github_create_branch', `${p.repo.fullName} ${branch}`, requestHash, { branch }, assertApproved, now, async () => {
     await deps.mcp.createBranch(p.repo, branch, p.repo.defaultBranch);
     return { externalId: branch, externalUrl: null };
   });
 
-  // 2. file(s) — read the branch's current blob sha for each so the update is valid
-  for (const f of patch.files) {
-    await execWrite(deps, ctx, jobId, fileWriteKey(ctx.recommendationId, ctx.stepKey, f.path), 'github_update_file', `${p.repo.fullName} ${f.path}`, requestHash, { path: f.path }, now, async () => {
-      const existing = await deps.mcp.readFile(p.repo, f.path, `refs/heads/${branch}`);
-      await deps.mcp.updateFile(p.repo, branch, f.path, f.content, `instrument: ${patch.pr_title}`.slice(0, 72), existing?.sha ?? null);
-      return { externalId: f.path, externalUrl: null };
-    });
-  }
+  // 2. the single approved file — idempotent: skip the write if the branch already has the content
+  await execWrite(deps, ctx, jobId, hk(fileWriteKey(ctx.recommendationId, ctx.stepKey, targetFile.path)), 'github_update_file', `${p.repo.fullName} ${targetFile.path}`, requestHash, { path: targetFile.path }, assertApproved, now, async () => {
+    const existing = await deps.mcp.readFile(p.repo, targetFile.path, `refs/heads/${branch}`);
+    if (existing && existing.content === targetFile.content) return { externalId: targetFile.path, externalUrl: null }; // already written (crash-resume)
+    await deps.mcp.updateFile(p.repo, branch, targetFile.path, targetFile.content, commitMsg, existing?.sha ?? null);
+    return { externalId: targetFile.path, externalUrl: null };
+  });
 
   // 3. PR
   const body = buildPrBody({ summary: patch.pr_summary, recommendationTitle: p.recommendationTitle, rationale: p.recommendationRationale });
   let prNumber = 0;
   let prUrl = '';
-  const prWrite = await execWrite(deps, ctx, jobId, prWriteKey(ctx.recommendationId, ctx.stepKey), 'github_create_pr', `${p.repo.fullName} PR for ${ctx.recommendationId}`, requestHash, { branch, title: patch.pr_title }, now, async () => {
-    const pr = await deps.mcp.createPr(p.repo, branch, p.repo.defaultBranch, patch.pr_title, body);
+  const prTitle = scrubSecrets(patch.pr_title).slice(0, 160);
+  const prWrite = await execWrite(deps, ctx, jobId, hk(prWriteKey(ctx.recommendationId, ctx.stepKey)), 'github_create_pr', `${p.repo.fullName} PR for ${ctx.recommendationId}`, requestHash, { branch, title: prTitle }, assertApproved, now, async () => {
+    const pr = await deps.mcp.createPr(p.repo, branch, p.repo.defaultBranch, prTitle, body);
     prNumber = pr.number;
     prUrl = pr.url;
     return { externalId: String(pr.number), externalUrl: pr.url };
@@ -223,7 +243,7 @@ async function handoff(deps: PrGenDeps, ctx: PrGenJobContext, jobId: string, now
   // github_pull_requests is upserted by the Task 6 webhook when GitHub fires
   // `pull_request opened` for this generated PR; here we just link it on the step.
   if (prNumber) {
-    await deps.store.setGeneratedPr(ctx.recommendationId, ctx.stepKey, { branch, url: prUrl, number: prNumber, files: patch.files.map((f) => f.path) }, now().toISOString());
+    await deps.store.setGeneratedPr(ctx.recommendationId, ctx.stepKey, { branch, url: prUrl, number: prNumber, files: [targetFile.path] }, now().toISOString());
   }
   // 'ready', NOT 'done' — a generated PR step completes only when the PR merges.
   await deps.store.setStepState(ctx.recommendationId, ctx.stepKey, 'ready', now().toISOString());
@@ -243,11 +263,13 @@ async function execWrite(
   targetSummary: string,
   requestHash: string,
   requestRedacted: Record<string, unknown>,
+  assertApproved: () => Promise<void>,
   now: () => Date,
   op: () => Promise<{ externalId: string | null; externalUrl: string | null }>,
 ): Promise<{ id: string; externalId: string | null; externalUrl: string | null }> {
   const prior = await deps.store.findExternalWrite(ctx.workspaceId, key);
   if (prior && prior.state === 'succeeded') return { id: prior.id, externalId: prior.externalId, externalUrl: prior.externalUrl };
+  await assertApproved(); // re-verify the approval is still approved BEFORE this write
   const id =
     prior?.id ??
     (await deps.store.insertExternalWrite({ workspaceId: ctx.workspaceId, jobId, approvalId: ctx.approvalId, actionKind, idempotencyKey: key, targetSummary, requestHash, requestRedacted, now: now().toISOString() }));
