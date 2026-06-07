@@ -45,11 +45,11 @@ const SERVERS = [
 
 // --- write-tool classification (mirror of server/lib/mcp-config.ts) -----------
 const KNOWN_WRITE_TOOLS = {
-  github: ['add_comment_to_pending_review', 'pull_request_review_write', 'create_and_submit_pull_request_review', 'submit_pending_pull_request_review', 'create_pending_pull_request_review', 'create_branch', 'create_or_update_file', 'push_files', 'delete_file', 'create_pull_request', 'update_pull_request', 'merge_pull_request', 'create_issue', 'update_issue', 'add_issue_comment'],
-  datadog: ['create_datadog_monitor', 'update_datadog_monitor', 'mute_datadog_monitor'],
+  github: ['add_comment_to_pending_review', 'pull_request_review_write', 'create_and_submit_pull_request_review', 'submit_pending_pull_request_review', 'create_pending_pull_request_review', 'create_branch', 'create_or_update_file', 'push_files', 'delete_file', 'create_pull_request', 'update_pull_request', 'merge_pull_request', 'create_issue', 'update_issue', 'add_issue_comment', 'fork_repository', 'request_copilot_review'],
+  datadog: ['create_datadog_monitor', 'update_datadog_monitor', 'mute_datadog_monitor', 'unmute_datadog_monitor'],
   'instrument-investigation': [],
 };
-const WRITE_PATTERNS = [/^create_/, /^update_/, /^upsert_/, /^delete_/, /^remove_/, /^edit_/, /^set_/, /^add_/, /^merge_/, /^push_/, /^post_/, /^put_/, /^patch_/, /^archive_/, /^mute_/, /^submit_/, /_write$/];
+const WRITE_PATTERNS = [/^create_/, /^update_/, /^upsert_/, /^delete_/, /^remove_/, /^edit_/, /^set_/, /^add_/, /^merge_/, /^push_/, /^post_/, /^put_/, /^patch_/, /^archive_/, /^mute_/, /^unmute_/, /^submit_/, /^fork_/, /^request_/, /^run_/, /^rerun_/, /^trigger_/, /^cancel_/, /^enable_/, /^disable_/, /^dismiss_/, /^assign_/, /^lock_/, /^unlock_/, /^close_/, /^reopen_/, /^approve_/, /^revoke_/, /^write_/, /_write$/];
 const isWriteTool = (server, tool) => {
   if ((KNOWN_WRITE_TOOLS[server] ?? []).includes(tool)) return true;
   if (server === 'instrument-investigation') return false;
@@ -68,9 +68,9 @@ const ERD_TOOLS = {
   'instrument-investigation': ['health_check', 'query_truefoundry_model_metrics', 'query_truefoundry_mcp_metrics', 'search_truefoundry_request_logs', 'get_truefoundry_trace_spans', 'get_instrument_evidence_bundle'],
 };
 
-// --- secret-leak guard (mirror of mcp-config.findSecretLikeValues) ------------
-const SECRET_KEY = /(token|secret|api[_-]?key|password|authorization|bearer|pat)\b/i;
-const SECRET_VALUE = [/^Bearer\s+/i, /^gh[pousr]_[A-Za-z0-9]{20,}/, /^github_pat_[A-Za-z0-9_]{20,}/, /^eyJ[A-Za-z0-9_-]{10,}\./, /^sk-[A-Za-z0-9]{20,}/];
+// --- secret-leak guard (mirror of server/lib/redaction.ts) --------------------
+const SECRET_KEY = /(token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|private[_-]?key|(^|[_-])key$|authorization|bearer|(^|[_-])pat$)/i;
+const SECRET_VALUE = [/\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/i, /\bgh[pousr]_[A-Za-z0-9]{20,}/, /\bgithub_pat_[A-Za-z0-9_]{20,}/, /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}/, /\bsk-[A-Za-z0-9-]{20,}/, /\bxox[baprs]-[A-Za-z0-9-]{10,}/, /\bAKIA[0-9A-Z]{16}\b/, /\bglpat-[A-Za-z0-9_-]{20,}/];
 function findSecretLike(node, p = '', hits = []) {
   if (node == null) return hits;
   if (typeof node === 'string') { if (SECRET_VALUE.some((re) => re.test(node))) hits.push(p); return hits; }
@@ -202,8 +202,17 @@ const leaks = writes.flatMap((w) => findSecretLike(w.config, `${w.provider}.conf
 if (leaks.length) { console.error('\n✗ ABORT: secret-looking values would be written:', leaks); process.exit(1); }
 console.log('\n✓ secret-leak guard clean (no token/PAT/bearer values in config)');
 
-console.log('\nPlanned integrations.config writes:');
-for (const w of writes) console.log(`  ${w.provider}${w.status ? ` [status=${w.status}]` : ''}:\n${JSON.stringify(w.config, null, 2).split('\n').map((l) => '    ' + l).join('\n')}`);
+// Redacted summary only — never dump the full merged config (a pre-existing
+// uncaught secret in the source config must not reach the logs).
+console.log('\nPlanned integrations.config writes (summary):');
+for (const w of writes) {
+  const mcps = w.config.mcp_servers
+    ? w.config.mcp_servers.map((m) => `${m.name}(${m.health} r${m.allowed_tools.read.length}/w${m.allowed_tools.write.length})`).join(', ')
+    : w.config.mcp
+      ? `${w.provider} r${w.config.mcp.allowed_tools.read.length}/w${w.config.mcp.allowed_tools.write.length} ${w.config.mcp.health}`
+      : '(no mcp block)';
+  console.log(`  ${w.provider}${w.status ? ` [status=${w.status}]` : ''}: keys=[${Object.keys(w.config).sort().join(', ')}] mcp=[${mcps}]`);
+}
 
 if (!APPLY) { console.log('\n(dry-run) re-run with --apply to write. Nothing changed.'); process.exit(0); }
 

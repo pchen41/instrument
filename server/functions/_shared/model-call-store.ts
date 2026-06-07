@@ -22,48 +22,80 @@ import { JobError } from '../../lib/retry.ts';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Admin = any;
 
+// ai_model_calls has NOT NULL columns the gateway can't always fill (a failed
+// call has no model; an unversioned call has no schema). Coerce to sentinels at
+// the DB boundary so an audit row always lands.
+const UNKNOWN_MODEL = 'unknown';
+const NO_SCHEMA = 'none';
+
 /** PostgREST-backed ModelCallStore. Writes one ai_model_calls row, returns its id. */
 export function createModelCallStore(admin: Admin): ModelCallStore {
   const db = admin.database;
+  const integrationCache = new Map<string, string>();
+
+  // integration_id is NOT NULL; resolve the workspace's TrueFoundry integration
+  // when the caller doesn't supply one (mirrors the 5B work store).
+  async function integrationFor(workspaceId: string): Promise<string> {
+    const cached = integrationCache.get(workspaceId);
+    if (cached) return cached;
+    const { data, error } = await db
+      .from('integrations')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('provider', 'truefoundry')
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new JobError({ retryable: true, code: 'integration_lookup_failed', summary: 'Could not resolve the TrueFoundry integration.', source: 'worker' });
+    if (!data?.id) throw new JobError({ retryable: false, code: 'integration_missing', summary: 'No TrueFoundry integration is configured for this workspace.', source: 'truefoundry' });
+    integrationCache.set(workspaceId, data.id as string);
+    return data.id as string;
+  }
+
+  async function rowToInsert(row: ModelCallRow): Promise<Record<string, unknown>> {
+    const integrationId = row.integrationId ?? (await integrationFor(row.workspaceId));
+    return {
+      workspace_id: row.workspaceId,
+      integration_id: integrationId,
+      job_id: row.jobId,
+      purpose: row.purpose,
+      api_surface: row.apiSurface,
+      status: row.status,
+      truefoundry_response_id: row.responseId ?? null,
+      truefoundry_trace_id: row.traceId ?? null,
+      truefoundry_span_id: row.spanId ?? null,
+      gateway_base_url_name: row.gatewayBaseUrlName ?? null,
+      provider_name: row.providerName ?? null,
+      model_name: row.modelName ?? UNKNOWN_MODEL,
+      agent_iteration_limit: row.agentIterationLimit ?? null,
+      mcp_servers_requested: row.mcpServersRequested ?? [],
+      tool_calls_redacted: row.toolCallsRedacted ?? [],
+      request_schema_version: row.requestSchemaVersion ?? NO_SCHEMA,
+      output_schema_version: row.outputSchemaVersion ?? NO_SCHEMA,
+      input_hash: row.inputHash,
+      output_redacted: row.outputRedacted ?? null,
+      validation_status: row.validationStatus,
+      input_tokens: row.inputTokens ?? null,
+      output_tokens: row.outputTokens ?? null,
+      total_tokens: row.totalTokens ?? null,
+      cost_usd: row.costUsd ?? null,
+      latency_ms: row.latencyMs ?? null,
+      error_code: row.errorCode ?? null,
+      error_summary: row.errorSummary ?? null,
+      started_at: row.startedAt,
+      completed_at: row.completedAt ?? null,
+    };
+  }
 
   return {
     async saveModelCall(row: ModelCallRow): Promise<{ id: string; deduped: boolean }> {
-      const insert = {
-        workspace_id: row.workspaceId,
-        integration_id: row.integrationId ?? null,
-        job_id: row.jobId ?? null,
-        purpose: row.purpose,
-        api_surface: row.apiSurface,
-        status: row.status,
-        truefoundry_response_id: row.responseId ?? null,
-        truefoundry_trace_id: row.traceId ?? null,
-        truefoundry_span_id: row.spanId ?? null,
-        gateway_base_url_name: row.gatewayBaseUrlName ?? null,
-        provider_name: row.providerName ?? null,
-        model_name: row.modelName ?? null,
-        agent_iteration_limit: row.agentIterationLimit ?? null,
-        mcp_servers_requested: row.mcpServersRequested ?? [],
-        tool_calls_redacted: row.toolCallsRedacted ?? [],
-        request_schema_version: row.requestSchemaVersion ?? null,
-        output_schema_version: row.outputSchemaVersion ?? null,
-        input_hash: row.inputHash,
-        output_redacted: row.outputRedacted ?? null,
-        validation_status: row.validationStatus,
-        input_tokens: row.inputTokens ?? null,
-        output_tokens: row.outputTokens ?? null,
-        total_tokens: row.totalTokens ?? null,
-        cost_usd: row.costUsd ?? null,
-        latency_ms: row.latencyMs ?? null,
-        error_code: row.errorCode ?? null,
-        error_summary: row.errorSummary ?? null,
-        started_at: row.startedAt,
-        completed_at: row.completedAt ?? null,
-      };
+      const insert = await rowToInsert(row);
       const { data, error } = await db.from('ai_model_calls').insert([insert]).select('id');
       if (error) {
-        // A racing insert on the (job_id, purpose) unique index → dedup onto the
-        // existing row so evidence can still link to a real id.
-        if (isUniqueViolation(error) && row.jobId) {
+        // (job_id, purpose) is unique. A prior row exists for this call — usually
+        // an earlier failed attempt or a resume. Upsert: a later SUCCESS overwrites
+        // the existing row (so a retry's success isn't lost behind a failure); a
+        // later FAILURE never clobbers (don't downgrade a recorded success).
+        if (isUniqueViolation(error)) {
           const existing = await db
             .from('ai_model_calls')
             .select('id')
@@ -71,7 +103,14 @@ export function createModelCallStore(admin: Admin): ModelCallStore {
             .eq('purpose', row.purpose)
             .limit(1)
             .maybeSingle();
-          if (existing.data?.id) return { id: existing.data.id as string, deduped: true };
+          const existingId = existing.data?.id as string | undefined;
+          if (existingId) {
+            if (row.status === 'succeeded') {
+              const upd = await db.from('ai_model_calls').update(insert).eq('id', existingId);
+              if (upd.error) throw new JobError({ retryable: true, code: 'store_write_failed', summary: 'Could not update the model call.', source: 'worker' });
+            }
+            return { id: existingId, deduped: true };
+          }
         }
         throw new JobError({ retryable: true, code: 'store_write_failed', summary: 'Could not persist the model call.', source: 'worker' });
       }
@@ -100,7 +139,7 @@ export function createModelCallStore(admin: Admin): ModelCallStore {
         content_hash: r.contentHash,
         verification_state: 'verified',
         observed_at: r.observedAt,
-        collected_at: r.observedAt,
+        collected_at: r.collectedAt,
       }));
       const { error } = await db.from('evidence_items').insert(payload);
       // A batch insert is all-or-nothing; if the batch races a unique

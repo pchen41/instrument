@@ -8,9 +8,16 @@
 //
 // Runtime-agnostic pure TS so the partitioning logic is unit-tested; the live
 // gateway calls + integrations write happen in scripts/verify-mcp.mjs.
+//
+// The secret-leak guard lives in ./redaction (shared with model-call); re-exported
+// here for callers that already import from mcp-config.
+export { findSecretLikeValues } from './redaction';
 
 /** Health of a registered MCP server, as recorded in integrations.config. */
 export type McpHealth = 'healthy' | 'degraded' | 'unreachable' | 'unregistered' | 'unknown';
+
+/** Where a server's tool list came from (live gateway vs ERD-documented fallback). */
+export type ToolSource = 'gateway_tools_list' | 'erd_documented';
 
 export interface McpServerConfig {
   name: string;
@@ -21,6 +28,7 @@ export interface McpServerConfig {
   read_only: boolean;
   allowed_tools: { read: string[]; write: string[] };
   health: McpHealth;
+  tool_source?: ToolSource;
   last_checked_at: string;
   /** Optional non-secret note (e.g. why degraded). */
   note?: string;
@@ -48,15 +56,24 @@ export const KNOWN_WRITE_TOOLS: Record<string, string[]> = {
     'create_issue',
     'update_issue',
     'add_issue_comment',
+    'fork_repository',
+    'request_copilot_review',
   ],
-  datadog: ['create_datadog_monitor', 'update_datadog_monitor', 'mute_datadog_monitor'],
+  datadog: ['create_datadog_monitor', 'update_datadog_monitor', 'mute_datadog_monitor', 'unmute_datadog_monitor'],
   'instrument-investigation': [],
 };
 
-/** Name patterns that almost always indicate a mutating tool. */
+/**
+ * Name prefixes/suffixes that indicate a mutating tool. Deliberately broad: a
+ * false "write" only over-restricts (puts a read behind the approval gate); a
+ * missed write is a governance hole. A tool matching none of these on a
+ * non-read-only server still defaults to read, so keep this list current.
+ */
 const WRITE_NAME_PATTERNS = [
   /^create_/, /^update_/, /^upsert_/, /^delete_/, /^remove_/, /^edit_/, /^set_/, /^add_/, /^merge_/,
-  /^push_/, /^post_/, /^put_/, /^patch_/, /^archive_/, /^mute_/, /^submit_/, /_write$/,
+  /^push_/, /^post_/, /^put_/, /^patch_/, /^archive_/, /^mute_/, /^unmute_/, /^submit_/, /^fork_/,
+  /^request_/, /^run_/, /^rerun_/, /^trigger_/, /^cancel_/, /^enable_/, /^disable_/, /^dismiss_/,
+  /^assign_/, /^lock_/, /^unlock_/, /^close_/, /^reopen_/, /^approve_/, /^revoke_/, /^write_/, /_write$/,
 ];
 
 /** Decide whether a single tool name mutates provider state. */
@@ -79,6 +96,8 @@ export function partitionTools(server: string, toolNames: string[]): { read: str
   return { read: [...read].sort(), write: [...write].sort() };
 }
 
+// (secret-leak guard moved to ./redaction and re-exported above)
+
 export interface BuildMcpServerConfigInput {
   name: string;
   serverUrl: string;
@@ -87,6 +106,7 @@ export interface BuildMcpServerConfigInput {
   health: McpHealth;
   checkedAt: string;
   fqn?: string;
+  toolSource?: ToolSource;
   note?: string;
 }
 
@@ -102,43 +122,8 @@ export function buildMcpServerConfig(input: BuildMcpServerConfigInput): McpServe
     // A read-only server never exposes write tools, even if the gateway lists some.
     allowed_tools: { read: readOnly ? [...read, ...write].sort() : read, write: readOnly ? [] : write },
     health: input.health,
+    ...(input.toolSource ? { tool_source: input.toolSource } : {}),
     last_checked_at: input.checkedAt,
     ...(input.note ? { note: input.note } : {}),
   };
-}
-
-/**
- * Guard against secrets leaking into stored MCP config. Returns the offending
- * key paths (empty = clean). Used by tests and the verify script before writing.
- */
-export function findSecretLikeValues(obj: unknown, path = ''): string[] {
-  const SECRET_KEY = /(token|secret|api[_-]?key|password|authorization|bearer|pat)\b/i;
-  const SECRET_VALUE = [
-    /^Bearer\s+/i,
-    /^gh[pousr]_[A-Za-z0-9]{20,}/, // GitHub PAT/token forms
-    /^github_pat_[A-Za-z0-9_]{20,}/,
-    /^eyJ[A-Za-z0-9_-]{10,}\./, // JWT (TrueFoundry PAT)
-    /^sk-[A-Za-z0-9]{20,}/,
-  ];
-  const hits: string[] = [];
-  const walk = (node: unknown, p: string): void => {
-    if (node == null) return;
-    if (typeof node === 'string') {
-      if (SECRET_VALUE.some((re) => re.test(node))) hits.push(p);
-      return;
-    }
-    if (Array.isArray(node)) {
-      node.forEach((v, i) => walk(v, `${p}[${i}]`));
-      return;
-    }
-    if (typeof node === 'object') {
-      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-        const child = p ? `${p}.${k}` : k;
-        if (SECRET_KEY.test(k) && typeof v === 'string' && v.length > 0) hits.push(child);
-        else walk(v, child);
-      }
-    }
-  };
-  walk(obj, path);
-  return hits;
 }

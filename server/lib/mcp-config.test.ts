@@ -25,6 +25,16 @@ describe('isWriteTool / partitionTools', () => {
     expect(write).toEqual(['create_datadog_monitor']);
   });
 
+  it('classifies less-obvious mutators (fork/request/upsert/edit) as write', () => {
+    expect(isWriteTool('github', 'fork_repository')).toBe(true);
+    expect(isWriteTool('github', 'request_copilot_review')).toBe(true);
+    expect(isWriteTool('datadog', 'upsert_datadog_dashboard')).toBe(true);
+    expect(isWriteTool('datadog', 'edit_datadog_notebook')).toBe(true);
+    // genuine reads stay read
+    expect(isWriteTool('github', 'get_file_contents')).toBe(false);
+    expect(isWriteTool('datadog', 'search_datadog_logs')).toBe(false);
+  });
+
   it('a read-only virtual MCP never classifies a tool as write', () => {
     expect(isWriteTool('instrument-investigation', 'create_branch')).toBe(false);
     const { read, write } = partitionTools('instrument-investigation', ['query_truefoundry_model_metrics', 'create_branch']);

@@ -202,3 +202,45 @@ Depends on Tasks 0, 2, 5A, and the runtime decision from Task 5B.
   MCP tool calls; production OAuth / token passthrough / automated MCP
   registration. 5C proves the persistence + validation + governance surface those
   tasks build on.
+- 2026-06-06 (review pass — Claude + Codex + Gemini static review): all three
+  reviewed the helper surface, persistence, and methodology. Applied all HIGH +
+  MED findings plus the cheap LOWs, then ran the live persistence smoke the
+  Manual Verification step had skipped.
+  - **Persistence path vs. real schema (HIGH).** `FakeStore` hid several NOT
+    NULL/uuid violations that real Postgres rejects: `ai_model_calls.{integration_id,
+    job_id, model_name, request_schema_version, output_schema_version}` and
+    `evidence_items.subject_id (uuid)` are NOT NULL. Fixes: `createModelCallStore`
+    now resolves `integration_id` per workspace (mirrors 5B) and coerces
+    `model_name`→`'unknown'` / schema versions→`'none'`; `runModelCall` requires
+    `jobId` and a UUID evidence `subjectId` (validated up front, no half-write).
+    `FakeStore` in the test now enforces NOT NULL + uuid so this class can't pass
+    green again.
+  - **Failed-row poisoned the idempotency slot (HIGH).** A failed attempt and a
+    later successful retry share the `(job_id, purpose)` unique index, so the
+    success was being deduped onto the stale `failed` row. `saveModelCall` now
+    upserts a `failed` row up to `succeeded` on conflict (a later failure never
+    downgrades a recorded success).
+  - **Secret-leak guard (MED, all three).** Value patterns were `^`-anchored
+    (missed embedded tokens, `sk-proj-…`, bare `key`/unprefixed Datadog hex).
+    Centralized in `server/lib/redaction.ts` (`\b`-anchored, broadened key+value
+    patterns, `scrubSecrets`), shared by `mcp-config` + `model-call` and mirrored
+    in `verify-mcp.mjs`. `tool_calls_redacted` and stored output are now scrubbed
+    before truncation; the verify dry-run prints a redacted summary (never the
+    full merged config).
+  - **Write-tool classification (MED, all three).** Expanded the mutating-prefix
+    list and known mutators (`fork_repository`, `request_copilot_review`,
+    `unmute_datadog_monitor`, …); GitHub now classifies 26 read / 18 write
+    (was 29/15). Config re-applied with the corrected allowlists.
+  - **LOWs:** balanced/string-aware `extractJson`; `errorParts` no longer falls
+    back to raw `err.message`; the failed-row save can't shadow the original
+    gateway error; evidence carries a separate `collected_at`; `tool_source` added
+    to the `McpServerConfig` type.
+  - **Live persistence smoke (the omitted Manual Verification step).** Ran the
+    real `createModelCallStore` + `runModelCall` against the dev DB via vite-node:
+    freeform success (integration resolved, schema versions coerced), valid
+    structured output + cited evidence (subject uuid, separate observed/collected
+    timestamps), sanitized failure row, and failure→retry upsert to `succeeded` —
+    6/6 checks, all throwaway rows cleaned up (0 left). This is what would have
+    caught every HIGH; it now passes.
+  - Result: full suite **165 passing**, `tsc` + function bundle green. `9d1bc61`
+    (initial 5C) was local-only; these fixes land as a follow-up commit.
