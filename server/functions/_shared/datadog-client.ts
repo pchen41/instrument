@@ -22,7 +22,10 @@ import type { DatadogEvent, DatadogSubmitter } from '../../lib/telemetry.ts';
 declare const Deno: any;
 
 const DEFAULT_SITE = 'us5.datadoghq.com';
-const SUBMIT_TIMEOUT_MS = 10_000;
+// Bounded so a slow us5 can't blow the worker tick budget: the emitter runs
+// inside finishFailure for up to maxJobs failing jobs (metric + event each), so
+// keep per-submit short. Datadog intake normally responds in well under a second.
+const SUBMIT_TIMEOUT_MS = 5_000;
 const METRIC_INTERVAL_S = 60;
 const DD_METRIC_TYPE_COUNT = 1; // Datadog intake v2: 1=count, 2=rate, 3=gauge
 

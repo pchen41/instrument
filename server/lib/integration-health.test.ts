@@ -45,6 +45,36 @@ describe('assessIntegrationHealth', () => {
     expect(r.lastErrorSummary).toContain('‹redacted›');
   });
 
+  it('classifies on the MOST RECENT failure — a newer error is not masked by an older rate-limit', () => {
+    const r = assessIntegrationHealth({
+      hasCredentials: true,
+      mcpRegistered: true,
+      recentFailures: [
+        { code: 'rate_limited', kind: 'rate_limit', at: '2026-06-05T00:00:00Z' }, // older
+        { code: 'gateway_http_502', at: '2026-06-06T00:00:00Z' }, // newer, not a rate limit
+      ],
+      now: NOW,
+    });
+    expect(r.status).toBe('degraded');
+    expect(r.lastErrorCode).toBe('gateway_http_502');
+  });
+
+  it('does NOT classify rate_limited from free-text summary alone (only kind/code)', () => {
+    const r = assessIntegrationHealth({
+      hasCredentials: true,
+      recentFailures: [{ code: 'gateway_http_502', summary: 'mentions rate limit in prose' }],
+      now: NOW,
+    });
+    expect(r.status).toBe('degraded'); // not rate_limited
+  });
+
+  it('treats an auth/invalid-credential rejection (creds present) as degraded with an invalid-credential code', () => {
+    expect(assessIntegrationHealth({ hasCredentials: true, recentFailures: [{ kind: 'auth' }], now: NOW }).lastErrorCode).toBe('invalid_credentials');
+    const byCode = assessIntegrationHealth({ hasCredentials: true, recentFailures: [{ code: 'gateway_http_401' }], now: NOW });
+    expect(byCode.status).toBe('degraded');
+    expect(byCode.lastErrorCode).toBe('gateway_http_401');
+  });
+
   it('picks the most recent failure by timestamp for diagnostics', () => {
     const r = assessIntegrationHealth({
       hasCredentials: true,

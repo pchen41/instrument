@@ -14,6 +14,7 @@
 // unit-tested; the actual Datadog HTTP POST + Postgres writes are injected as
 // `DatadogSubmitter` / `EmissionStore` by the Deno edge (datadog-client.ts,
 // telemetry-store.ts). Same core/edge split as the 5B/5C helpers.
+import { sha256Hex } from './hash';
 import type { ClassifiedError } from './retry';
 import type { JobType } from './types';
 import { scrubSecrets } from './redaction';
@@ -96,19 +97,25 @@ export interface DatadogEvent {
   tags: string[];
 }
 
-/** Datadog tag values: lowercased, restricted charset, bounded length. */
-export function sanitizeTagValue(v: string): string {
-  return v
-    .toLowerCase()
-    .replace(/[^a-z0-9_\-./]/g, '_')
-    .slice(0, 200);
+/**
+ * Datadog tag values: restricted charset, bounded length. Lowercased by default
+ * (Datadog lowercases tag values server-side anyway). `preserveCase` is used for
+ * the trace/request IDs on the event so the case-correct value is still legible
+ * in the event payload — though the authoritative copy for the investigation
+ * pivot is the case-preserved `telemetry_emissions.truefoundry_*_id` columns.
+ */
+export function sanitizeTagValue(v: string, opts?: { preserveCase?: boolean }): string {
+  const base = opts?.preserveCase ? v : v.toLowerCase();
+  const charset = opts?.preserveCase ? /[^A-Za-z0-9_\-./]/g : /[^a-z0-9_\-./]/g;
+  return base.replace(charset, '_').slice(0, 200);
 }
 
 /** Render a `{k: v}` tag map as Datadog `k:value` strings, skipping empties. */
-export function toDatadogTags(tags: Record<string, string>): string[] {
+export function toDatadogTags(tags: Record<string, string>, preserveCaseKeys: string[] = []): string[] {
+  const preserve = new Set(preserveCaseKeys);
   return Object.entries(tags)
     .filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => `${k}:${sanitizeTagValue(v)}`);
+    .map(([k, v]) => `${k}:${sanitizeTagValue(v, { preserveCase: preserve.has(k) })}`);
 }
 
 function compact(obj: Record<string, string | null | undefined>): Record<string, string> {
@@ -159,8 +166,11 @@ export function buildEmission(ctx: TelemetryContext, signal: JobFailureSignal): 
         `(${signal.error.code}) from ${source}. ${signal.error.summary}`,
     ),
     alertType: signal.kind === 'retry' ? 'warning' : 'error',
-    aggregationKey: `${metricName}:${signal.jobId}`,
-    tags: toDatadogTags(tags),
+    // Hash the job id so NO raw job id reaches Datadog in any field (not just
+    // tags) while still threading events for the same job. The job_id stays a
+    // real telemetry_emissions column for the local audit pivot.
+    aggregationKey: `${metricName}:${sha256Hex(signal.jobId).slice(0, 16)}`,
+    tags: toDatadogTags(tags, ['trace_id', 'request_id']),
   };
 
   return {
@@ -207,6 +217,10 @@ export interface EmitResult {
   id: string;
   /** Redacted reason when outcome is 'failed' (never raw provider/HTTP detail). */
   error?: string;
+  /** True when the no-op/mock sink handled it (no Datadog config). */
+  mock?: boolean;
+  /** Redacted reason the (best-effort) event failed even though the metric landed. */
+  eventError?: string;
 }
 
 export interface EmitDeps {
@@ -236,25 +250,44 @@ export async function emitReliabilitySignal(
   if (reserved.alreadySucceeded) {
     return { outcome: 'skipped_duplicate', id: reserved.id };
   }
+
+  // No Datadog config → the documented mock sink. Persist the audit row but leave
+  // emitted_at NULL so a never-submitted row is provably distinct from a real us5
+  // 2xx (a rotated/missing key must not silently look like a successful emission).
+  if (!deps.datadog.enabled) {
+    await deps.store.finish(reserved.id, 'succeeded', null);
+    return { outcome: 'succeeded', id: reserved.id, mock: true };
+  }
+
+  // The metric is the monitor's threshold signal — its 2xx defines success. Fail
+  // the emission only if the metric fails (nothing was sent → safe to retry).
   try {
-    // Metric first (the monitor's threshold signal), then the human-readable
-    // event. Both are bounded by the submitter's own timeout/abort.
     await deps.datadog.submitMetric(rec.metricName, rec.value, toDatadogTags(rec.routingTags));
-    await deps.datadog.submitEvent(rec.event);
-    await deps.store.finish(reserved.id, 'succeeded', deps.now().toISOString());
-    return { outcome: 'succeeded', id: reserved.id };
   } catch (err) {
     await deps.store.finish(reserved.id, 'failed', null);
     return { outcome: 'failed', id: reserved.id, error: redactErr(err) };
   }
+
+  // The event is best-effort human context. Once the metric has landed, an event
+  // failure must NOT flip the row to `failed` — re-emitting the same attempt would
+  // double-count the (already-delivered) metric. Record it on the result instead.
+  let eventError: string | undefined;
+  try {
+    await deps.datadog.submitEvent(rec.event);
+  } catch (err) {
+    eventError = redactErr(err);
+  }
+  await deps.store.finish(reserved.id, 'succeeded', deps.now().toISOString());
+  return eventError ? { outcome: 'succeeded', id: reserved.id, eventError } : { outcome: 'succeeded', id: reserved.id };
 }
 
 function redactErr(err: unknown): string {
   // Datadog client errors are pre-shaped (a short code); anything else collapses
-  // to a generic string so an HTTP body / token can't ride into the result.
+  // to a generic string so an HTTP body / token can't ride into the result. Scrub
+  // even the shaped code defensively in case a third-party error embeds a secret.
   if (err && typeof err === 'object' && 'code' in err) {
     const code = (err as { code?: unknown }).code;
-    if (typeof code === 'string') return code;
+    if (typeof code === 'string') return scrubSecrets(code);
   }
   return 'datadog_submit_failed';
 }

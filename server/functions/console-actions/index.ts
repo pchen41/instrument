@@ -11,6 +11,7 @@ import { ActionError, handleAction } from '../../lib/actions.ts';
 import { createDatadogClient } from '../_shared/datadog-client.ts';
 import { createJobTelemetryEmitter } from '../_shared/telemetry-store.ts';
 import { runTick } from '../../lib/worker.ts';
+import { createConsoleSink, createInstrumentation } from '../../lib/instrumentation.ts';
 import { systemClock } from '../../lib/time.ts';
 
 // deno-lint-ignore no-explicit-any
@@ -52,6 +53,14 @@ export default async function (req: Request): Promise<Response> {
 
   const admin = createAdminClient({ baseUrl, apiKey });
   const db = createPgDb(admin);
+  // Broad instrumentation for this server path (Task 5D). Console sink → InsForge
+  // log stream; no-op-safe. The action name is low-cardinality; never the payload.
+  const datadog = createDatadogClient();
+  const instrument = createInstrumentation(
+    { service: datadog.service, environment: datadog.environment, enabled: true },
+    createConsoleSink(),
+  ).child({ path: 'server', fn: 'console-actions', action: body.action });
+  const endSpan = instrument.span('server.console_action');
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await handleAction(db, { userId, clock: systemClock }, body as any);
@@ -66,19 +75,21 @@ export default async function (req: Request): Promise<Response> {
           clock: systemClock,
           maxJobs: 5,
           phaseDelayMs: 120,
-          emitJobTelemetry: createJobTelemetryEmitter(admin, createDatadogClient()),
+          emitJobTelemetry: createJobTelemetryEmitter(admin, datadog),
         });
       } catch {
         /* the scheduled tick will pick the job up */
       }
     }
+    endSpan({ ok: true });
     return json(result);
   } catch (err) {
     if (err instanceof ActionError) return json({ error: err.code, message: err.message }, err.status);
-    return json({ error: 'internal', message: errMessage(err) }, 500);
+    // Never echo a raw error to the browser (it can carry internal/provider
+    // detail); log a redacted code server-side and return a stable shape — same
+    // posture as job-worker-tick (review fix).
+    endSpan({ ok: false });
+    instrument.log('error', 'server.console_action_error', { error: err instanceof Error ? err.message : String(err) });
+    return json({ error: 'internal' }, 500);
   }
-}
-
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

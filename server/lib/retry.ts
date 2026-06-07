@@ -1,3 +1,4 @@
+import { scrubSecrets } from './redaction';
 import type { JobRow, RetryPolicy } from './types';
 
 // Engine default backoff. base 20s, x2 per attempt, capped at 5 min. A job's own
@@ -46,10 +47,13 @@ export interface ClassifiedError {
 export function classifyError(err: unknown): ClassifiedError {
   if (err && typeof err === 'object' && 'retryable' in err && 'code' in err) {
     const e = err as Partial<ClassifiedError>;
+    // Scrub code/summary defensively: these are persisted to jobs.error_* and the
+    // attempts/audit jsonb, so a token accidentally placed in a thrown summary
+    // must not land in the database (review hardening).
     return {
       retryable: !!e.retryable,
-      code: e.code ?? 'worker_error',
-      summary: e.summary ?? 'The job failed.',
+      code: e.code ? scrubSecrets(String(e.code)) : 'worker_error',
+      summary: e.summary ? scrubSecrets(String(e.summary)) : 'The job failed.',
       source: e.source ?? null,
     };
   }

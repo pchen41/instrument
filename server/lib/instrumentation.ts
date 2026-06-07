@@ -82,28 +82,45 @@ export interface Instrumentation {
   child(attributes: Record<string, unknown>): Instrumentation;
 }
 
+const MAX_REDACT_DEPTH = 4;
+const MAX_REDACT_ARRAY = 50;
+
 /**
- * Redact an attribute bag: drop/​mask values that look like secrets and mask
- * secret-shaped substrings inside ordinary strings. Keeps numbers/booleans as-is.
- * Applied to every emitted entry so no provider token or admin key can leak via
- * a stray attribute (e.g. an error string carrying an Authorization header).
+ * Redact an attribute bag recursively. The secret-NAME guard
+ * (`SECRET_KEY_PATTERN`) fires for a key at EVERY depth and for ANY value type —
+ * so a secret-named field leaks whether its value is a string, a number, or
+ * nested (e.g. `{config:{datadog_api_key:'<32-hex>'}}` or `{authorization: 1234}`,
+ * both of which the old string-only guard missed). String values are additionally
+ * scrubbed for secret-shaped substrings; numbers/booleans pass through; nested
+ * objects/arrays are walked (bounded by depth + array length) instead of
+ * stringified, so the key-name guard reaches every level.
  */
 export function redactAttributes(attrs: Record<string, unknown>): Record<string, unknown> {
+  return redactObject(attrs, 0);
+}
+
+function redactObject(obj: Record<string, unknown>, depth: number): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(attrs)) {
+  for (const [k, v] of Object.entries(obj)) {
     if (v == null) continue;
-    if (typeof v === 'string') {
-      if (SECRET_KEY_PATTERN.test(k) || isSecretValue(v)) out[k] = '‹redacted›';
-      else out[k] = scrubSecrets(v);
-    } else if (typeof v === 'number' || typeof v === 'boolean') {
-      out[k] = v;
-    } else {
-      // Nested objects/arrays: stringify + scrub so we never emit an unbounded or
-      // secret-bearing blob, and keep the line a flat structured record.
-      out[k] = scrubSecrets(safeStringify(v)).slice(0, 1000);
+    if (SECRET_KEY_PATTERN.test(k)) {
+      out[k] = '‹redacted›'; // secret-named: mask regardless of value type/shape
+      continue;
     }
+    const rv = redactValue(v, depth);
+    if (rv !== undefined) out[k] = rv;
   }
   return out;
+}
+
+function redactValue(v: unknown, depth: number): unknown {
+  if (v == null) return undefined;
+  if (typeof v === 'string') return isSecretValue(v) ? '‹redacted›' : scrubSecrets(v);
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  if (depth >= MAX_REDACT_DEPTH) return scrubSecrets(safeStringify(v)).slice(0, 1000);
+  if (Array.isArray(v)) return v.slice(0, MAX_REDACT_ARRAY).map((e) => redactValue(e, depth + 1));
+  if (typeof v === 'object') return redactObject(v as Record<string, unknown>, depth + 1);
+  return undefined;
 }
 
 function safeStringify(v: unknown): string {

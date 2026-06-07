@@ -71,6 +71,14 @@ describe('buildEmission — routing tags', () => {
     expect(buildEmission(CTX, signal({ jobId: 'j9', attempt: 3 })).idempotencyKey).toBe('j9:attempt-3');
   });
 
+  it('hashes the job id in the event aggregation key — no raw job id reaches Datadog', () => {
+    const rec = buildEmission(CTX, signal({ jobId: 'job-abc' }));
+    expect(rec.event.aggregationKey).not.toContain('job-abc');
+    expect(rec.event.aggregationKey.startsWith('instrument.job.retry:')).toBe(true);
+    // stable for the same job (events thread together)
+    expect(buildEmission(CTX, signal({ jobId: 'job-abc', attempt: 5 })).event.aggregationKey).toBe(rec.event.aggregationKey);
+  });
+
   it('falls back to error.source for the integration tag and worker when absent', () => {
     expect(buildEmission(CTX, signal({ source: null, error: { retryable: false, code: 'worker_error', summary: 'x', source: null } })).routingTags.integration).toBe('worker');
     expect(buildEmission(CTX, signal({ source: 'datadog' })).routingTags.integration).toBe('datadog');
@@ -157,9 +165,30 @@ describe('emitReliabilitySignal', () => {
     expect(store.finishes).toEqual([{ id: 'row-1', state: 'failed', emittedAt: null }]);
   });
 
-  it('does not leak a raw error message into the result on an unshaped throw', async () => {
+  it('event failure AFTER a 2xx metric still finishes succeeded (no metric double-send)', async () => {
     const store = fakeStore();
-    const dd = fakeDatadog({ submitEvent: vi.fn(async () => { throw new Error('Authorization: Bearer secret123456789'); }) });
+    const dd = fakeDatadog({ submitEvent: vi.fn(async () => { throw Object.assign(new Error('x'), { code: 'datadog_http_400' }); }) });
+    const res = await emitReliabilitySignal(deps(store, dd), CTX, signal());
+    expect(res.outcome).toBe('succeeded'); // the metric (the monitor signal) landed
+    expect(res.eventError).toBe('datadog_http_400');
+    expect(dd.submitMetric).toHaveBeenCalledTimes(1);
+    expect(store.finishes).toEqual([{ id: 'row-1', state: 'succeeded', emittedAt: '2026-06-06T00:00:00.000Z' }]);
+  });
+
+  it('disabled (mock) sink: persists the row succeeded with NULL emitted_at and never calls Datadog', async () => {
+    const store = fakeStore();
+    const dd = fakeDatadog({ enabled: false });
+    const res = await emitReliabilitySignal(deps(store, dd), CTX, signal());
+    expect(res).toMatchObject({ outcome: 'succeeded', mock: true });
+    expect(dd.submitMetric).not.toHaveBeenCalled();
+    expect(dd.submitEvent).not.toHaveBeenCalled();
+    // emitted_at NULL distinguishes a never-submitted mock row from a real us5 2xx.
+    expect(store.finishes).toEqual([{ id: 'row-1', state: 'succeeded', emittedAt: null }]);
+  });
+
+  it('does not leak a raw error message into the result on an unshaped metric throw', async () => {
+    const store = fakeStore();
+    const dd = fakeDatadog({ submitMetric: vi.fn(async () => { throw new Error('Authorization: Bearer secret123456789'); }) });
     const res = await emitReliabilitySignal(deps(store, dd), CTX, signal());
     expect(res.outcome).toBe('failed');
     expect(res.error).toBe('datadog_submit_failed');

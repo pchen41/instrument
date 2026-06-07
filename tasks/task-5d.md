@@ -169,7 +169,9 @@ exactly:
   rate-limit proof, `integration:truefoundry` (and optionally
   `error_code:rate_limited`) routes it to the configured service incident.
 - **Event monitor (alternative / for human context in the incident):**
-  `events("source:instrument tags:(service:instrument env:production integration:truefoundry)").rollup("count").by("workflow").last("5m") >= 1`
+  `events("tags:(service:instrument env:production integration:truefoundry)").rollup("count").by("workflow").last("5m") >= 1`
+  — filters on tags the event provably carries (not `source:`, since the custom
+  `source_type_name` may not be searchable as a `source:` facet).
 
 When the monitor fires it creates/updates the Datadog incident, which Instrument
 ingests via the Datadog alert webhook and investigates — the trace_id/request_id
@@ -205,3 +207,43 @@ pointer; ERD).
   `trigger_summary.last_trace_id/last_request_id`; the provider workflow tasks
   (6/7/9/11/12) stash those from their model/MCP calls so reliability emissions
   carry the live TrueFoundry trace.
+
+### Review-fix pass (2026-06-06, Claude+Codex+Gemini static review)
+
+All three converged on real gaps; all HIGH+MED + cheap LOWs applied (full suite
+**207 passing**, tsc clean, bundle green; re-smoked live + redeployed):
+
+- **Integration health is now WIRED** (was shipped as an un-wired pure helper —
+  the unanimous headline). New `_shared/integration-health-store.ts`
+  (`writeIntegrationHealth`, `reflectProviderFailure`,
+  `reflectTelemetrySubmissionFailure`) persists `integrations.status` +
+  `last_error_*` + `last_checked_at`. The worker telemetry emitter calls it:
+  a Datadog-submission failure → datadog `degraded`; a provider-sourced job
+  failure → that integration `rate_limited`/`degraded`(invalid-cred)/degraded.
+  Failure-driven (visible in the console on real failures); recovery→`connected`
+  is provider-task scope (they own the success/MCP-registration context).
+- **Redaction made recursive** (`instrumentation.redactAttributes`): the
+  secret-NAME guard now fires for any value type and at every depth, so a
+  secret-named field leaks no longer when its value is numeric/boolean or nested
+  (e.g. `{config:{datadog_api_key:'<32-hex>'}}`).
+- **Partial-Datadog-success idempotency:** the metric is primary (its 2xx =
+  success); an event failure after the metric lands no longer flips the row to
+  `failed` (which would have risked a metric double-send on any re-emit).
+- **Disabled/mock sink is now distinguishable:** no `DATADOG_API_KEY` → row
+  `succeeded` with **`emitted_at` NULL** (a real us5 2xx always stamps
+  `emitted_at`), so a rotated/missing key can't masquerade as a real emission.
+- **`finish()` no longer swallows PostgREST errors silently** (logs a redacted
+  code; doesn't mislabel the row); **`console-actions` no longer returns
+  `err.message` to the browser** (generic `internal` + server-side log).
+- **Health precedence tightened:** classify on the most-recent failure (not "any
+  in history"), gate rate-limit on kind/code (not free-text summary), handle
+  `auth`/invalid-credential as degraded-with-invalid-cred-code.
+- **No raw job id reaches Datadog at all:** the event `aggregation_key` now uses
+  `sha256(jobId)` (was the raw UUID). Also: `redactErr` + `classifyError` scrub
+  defensively; trace/request tag values keep case; per-submit timeout 10s→5s to
+  bound tick latency; **broad instrumentation now wired into `console-actions`**
+  too (was worker-tick only).
+- **Deterministic tests added** for the previously smoke-only paths: the store's
+  unique-conflict→lookup branch + NOT NULL insert payload + finish-error
+  (`telemetry-store.test.ts`), the disabled-sink + event-failure orchestration,
+  and the recursive-redaction holes.

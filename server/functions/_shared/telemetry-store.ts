@@ -17,6 +17,7 @@ import {
   type TelemetryContext,
 } from '../../lib/telemetry.ts';
 import { isUniqueViolation } from './agent-runtime.ts';
+import { reflectProviderFailure, reflectTelemetrySubmissionFailure } from './integration-health-store.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Admin = any;
@@ -90,10 +91,16 @@ export function createTelemetryStore(admin: Admin): EmissionStore {
     },
 
     async finish(id, state, emittedAt) {
-      await db
+      const { error } = await db
         .from('telemetry_emissions')
         .update({ emission_state: state, emitted_at: emittedAt })
         .eq('id', id);
+      // Don't throw on a finish failure: the Datadog signal already (or never)
+      // went out; flipping the orchestration to its catch would mislabel the row.
+      // Surface a redacted code so a stuck-`running` row is at least observable.
+      if (error) {
+        console.log(JSON.stringify({ source: 'instrument', kind: 'log', level: 'warn', name: 'telemetry.finish_failed', attributes: { state } }));
+      }
     },
   };
 }
@@ -111,11 +118,32 @@ export function createJobTelemetryEmitter(
   const store = createTelemetryStore(admin);
   const ctx: TelemetryContext = { service: datadog.service, environment: datadog.environment };
   return async (signal) => {
+    const now = new Date().toISOString();
+    let result;
     try {
-      await emitReliabilitySignal({ store, datadog, now: () => new Date() }, ctx, signal);
-    } catch (err) {
+      result = await emitReliabilitySignal({ store, datadog, now: () => new Date() }, ctx, signal);
+    } catch {
       // reserve/finish DB errors land here; log a code, never the row/secret.
       console.log(JSON.stringify({ source: 'instrument', kind: 'log', level: 'warn', name: 'telemetry.emit_failed', attributes: { metric: signal.kind === 'retry' ? 'instrument.job.retry' : 'instrument.job.error' } }));
+      return;
+    }
+    // Reflect health (best-effort, never throws into the worker):
+    try {
+      // (a) our telemetry submission to Datadog failed → datadog integration degraded.
+      if (result.outcome === 'failed') {
+        await reflectTelemetrySubmissionFailure(admin, signal.workspaceId, now);
+      }
+      // (b) the job failed against a known provider → reflect on that integration.
+      await reflectProviderFailure(admin, {
+        workspaceId: signal.workspaceId,
+        integrationId: signal.integrationId ?? null,
+        provider: signal.source ?? null,
+        code: signal.error.code,
+        summary: signal.error.summary,
+        now,
+      });
+    } catch {
+      /* health is derived; a write hiccup must not disturb the engine */
     }
   };
 }

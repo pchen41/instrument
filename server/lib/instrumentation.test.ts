@@ -81,11 +81,31 @@ describe('createInstrumentation — enabled', () => {
 });
 
 describe('redactAttributes', () => {
-  it('drops nulls, keeps primitives, bounds + scrubs nested objects', () => {
+  it('drops nulls, keeps primitives, recurses into nested objects', () => {
     const out = redactAttributes({ a: null, n: 7, b: true, nested: { x: 'ok', secret: 'eyJaa.bbcc.ddee' } });
     expect(out).not.toHaveProperty('a');
     expect(out.n).toBe(7);
     expect(out.b).toBe(true);
-    expect(typeof out.nested).toBe('string');
+    expect(typeof out.nested).toBe('object');
+    expect((out.nested as Record<string, unknown>).x).toBe('ok');
+    expect((out.nested as Record<string, unknown>).secret).toBe('‹redacted›'); // secret-named, nested
+  });
+
+  it('masks secret-NAMED keys regardless of value type or depth (the review holes)', () => {
+    const out = redactAttributes({
+      authorization: 1234567890, // numeric secret-named value (was bypassed)
+      api_key: true, // boolean secret-named value (was bypassed)
+      config: { datadog_api_key: '0123456789abcdef0123456789abcdef' }, // nested unstructured 32-hex (was bypassed)
+    });
+    expect(out.authorization).toBe('‹redacted›');
+    expect(out.api_key).toBe('‹redacted›');
+    expect((out.config as Record<string, unknown>).datadog_api_key).toBe('‹redacted›');
+  });
+
+  it('scrubs secret-shaped values inside nested arrays/objects', () => {
+    const out = redactAttributes({ items: [{ note: 'ok' }, { note: 'tok ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345' }] });
+    const items = out.items as Record<string, unknown>[];
+    expect(items[0].note).toBe('ok');
+    expect(String(items[1].note)).toContain('‹redacted›');
   });
 });

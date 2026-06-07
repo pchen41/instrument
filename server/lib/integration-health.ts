@@ -27,7 +27,7 @@ export type IntegrationStatus =
 export interface RecentFailure {
   code?: string | null;
   summary?: string | null;
-  /** Coarse class; 'rate_limit' drives the rate_limited status. */
+  /** Coarse class; 'rate_limit' drives rate_limited, 'auth' drives the invalid-credential path. */
   kind?: 'rate_limit' | 'auth' | 'other' | null;
   at?: string | null;
 }
@@ -55,14 +55,22 @@ export interface HealthResult {
 }
 
 const RATE_LIMIT_CODE = /rate.?limit|429|too.?many.?requests/i;
+const AUTH_CODE = /401|403|unauthor|forbidden|invalid.*(key|token|credential)|auth.*(fail|denied)/i;
 
+// Classify only on kind + code, NOT free-text summary — a summary that merely
+// mentions "rate limit" must not misclassify the status (review: Claude/Gemini).
 function isRateLimit(f: RecentFailure): boolean {
-  return f.kind === 'rate_limit' || (f.code != null && RATE_LIMIT_CODE.test(f.code)) || (f.summary != null && RATE_LIMIT_CODE.test(f.summary));
+  return f.kind === 'rate_limit' || (f.code != null && RATE_LIMIT_CODE.test(f.code));
+}
+
+function isAuth(f: RecentFailure): boolean {
+  return f.kind === 'auth' || (f.code != null && AUTH_CODE.test(f.code));
 }
 
 function mostRecent(failures: RecentFailure[]): RecentFailure | null {
   if (!failures.length) return null;
-  // Prefer an explicit timestamp ordering; fall back to the first element.
+  // Prefer an explicit timestamp ordering; fall back to the first element
+  // (callers should pass most-recent-first when timestamps are absent).
   const withAt = failures.filter((f) => f.at);
   if (withAt.length === failures.length) {
     return [...failures].sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
@@ -91,12 +99,25 @@ export function assessIntegrationHealth(input: HealthInput): HealthResult {
     };
   }
 
-  if (failures.some(isRateLimit)) {
-    const rl = failures.find(isRateLimit)!;
+  // Classify on the MOST RECENT failure, not "any in history" — an older
+  // rate-limit must not mask a newer, more serious failure (review).
+  if (latest && isRateLimit(latest)) {
     return {
       status: 'rate_limited',
-      lastErrorCode: rl.code ?? 'rate_limited',
-      lastErrorSummary: rl.summary ? scrubSecrets(rl.summary) : 'The provider is rate limiting requests.',
+      lastErrorCode: latest.code ?? 'rate_limited',
+      lastErrorSummary: latest.summary ? scrubSecrets(latest.summary) : 'The provider is rate limiting requests.',
+      checkedAt: input.now,
+    };
+  }
+
+  // Credential present but the provider rejected it (401/403/invalid token): the
+  // credential is unusable. Surface it as degraded with an invalid-credential code
+  // (not missing_credentials, which means *no* credential is configured at all).
+  if (latest && isAuth(latest)) {
+    return {
+      status: 'degraded',
+      lastErrorCode: latest.code ?? 'invalid_credentials',
+      lastErrorSummary: latest.summary ? scrubSecrets(latest.summary) : 'The provider rejected the configured credential.',
       checkedAt: input.now,
     };
   }
