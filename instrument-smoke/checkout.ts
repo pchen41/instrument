@@ -27,25 +27,38 @@ function totalCents(items: CartItem[]): number {
 }
 
 export async function checkout(req: CheckoutRequest): Promise<CheckoutResult> {
-  if (req.items.length === 0) {
-    throw new Error('cart is empty');
+  const startTime = Date.now();
+  let status: 'success' | 'failure' = 'success';
+
+  try {
+    if (req.items.length === 0) {
+      throw new Error('cart is empty');
+    }
+
+    const amount = totalCents(req.items);
+
+    const reservation = await reserveInventory(req.items);
+    if (!reservation.ok) {
+      status = 'failure';
+      return { orderId: '', totalCents: amount, status: 'declined' };
+    }
+
+    const charge = await chargePayment(req.paymentToken, amount);
+    if (!charge.ok) {
+      await releaseInventory(reservation.holdId);
+      status = 'failure';
+      return { orderId: '', totalCents: amount, status: 'declined' };
+    }
+
+    const order = await persistOrder(req.userId, req.items, amount, charge.chargeId);
+    return { orderId: order.id, totalCents: amount, status: 'confirmed' };
+  } finally {
+    const duration = Date.now() - startTime;
+    // Increment counter metric with status tag
+    console.log(`metric:checkout.attempts:count:1|#status:${status}`);
+    // Record histogram metric for checkout latency
+    console.log(`metric:checkout.duration:histogram:${duration}|#status:${status}`);
   }
-
-  const amount = totalCents(req.items);
-
-  const reservation = await reserveInventory(req.items);
-  if (!reservation.ok) {
-    return { orderId: '', totalCents: amount, status: 'declined' };
-  }
-
-  const charge = await chargePayment(req.paymentToken, amount);
-  if (!charge.ok) {
-    await releaseInventory(reservation.holdId);
-    return { orderId: '', totalCents: amount, status: 'declined' };
-  }
-
-  const order = await persistOrder(req.userId, req.items, amount, charge.chargeId);
-  return { orderId: order.id, totalCents: amount, status: 'confirmed' };
 }
 
 // --- collaborators (stubbed for the smoke module) --------------------------
