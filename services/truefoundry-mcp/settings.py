@@ -30,7 +30,7 @@ def _csv_env(name: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Settings:
-    tfy_base_url: str
+    tfy_control_plane_url: str
     tfy_api_token: str | None
     tfy_data_routing_destination: str | None
     tfy_tracing_project_fqn: str | None
@@ -44,7 +44,7 @@ class Settings:
 
     @property
     def truefoundry_configured(self) -> bool:
-        return bool(self.tfy_base_url and self.tfy_api_token)
+        return bool(self.tfy_control_plane_url and self.tfy_api_token)
 
     @property
     def mcp_auth_configured(self) -> bool:
@@ -58,7 +58,7 @@ def load_settings() -> Settings:
         allowed_hosts.append(render_hostname)
 
     return Settings(
-        tfy_base_url=os.getenv("TFY_BASE_URL", "https://gateway.truefoundry.ai").rstrip("/"),
+        tfy_control_plane_url=os.getenv("TFY_CONTROL_PLANE_URL", "").rstrip("/"),
         tfy_api_token=os.getenv("TFY_API_TOKEN"),
         tfy_data_routing_destination=os.getenv("TFY_DATA_ROUTING_DESTINATION"),
         tfy_tracing_project_fqn=os.getenv("TFY_TRACING_PROJECT_FQN"),

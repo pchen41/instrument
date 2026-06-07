@@ -7,7 +7,7 @@ services:
     startCommand: python server.py
     healthCheckPath: /healthz
     envVars:
-      - key: TFY_BASE_URL
+      - key: TFY_CONTROL_PLANE_URL
         sync: false
       - key: TFY_API_TOKEN
         sync: false

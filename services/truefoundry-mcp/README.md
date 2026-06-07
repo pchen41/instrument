@@ -22,7 +22,9 @@ Gateway registers the public `/mcp` URL, and Agent API workflows call it by FQN.
 
 Set these in Render. Record secret names only in task notes, never values.
 
-- `TFY_BASE_URL` - defaults to `https://gateway.truefoundry.ai`.
+- `TFY_CONTROL_PLANE_URL` - TrueFoundry control-plane URL for observability
+  APIs, for example `https://<tenant>.truefoundry.cloud`. Do not use the global
+  AI Gateway inference URL `https://gateway.truefoundry.ai` for metrics/logs.
 - `TFY_API_TOKEN` - TrueFoundry API token or VAT for server-side API calls.
 - `TFY_DATA_ROUTING_DESTINATION` - optional TrueFoundry routing header value.
 - `TFY_TRACING_PROJECT_FQN` - tracing project FQN for request log/span queries,

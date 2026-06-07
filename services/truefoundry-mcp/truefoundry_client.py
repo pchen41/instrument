@@ -1,4 +1,4 @@
-"""Minimal async client for TrueFoundry gateway APIs used by the demo tools."""
+"""Minimal async client for TrueFoundry control-plane APIs used by the demo tools."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ class TrueFoundryClient:
 
     def _headers(self) -> dict[str, str]:
         missing = []
+        if not self.settings.tfy_control_plane_url:
+            missing.append("TFY_CONTROL_PLANE_URL")
         if not self.settings.tfy_api_token:
             missing.append("TFY_API_TOKEN")
         if missing:
@@ -29,7 +31,7 @@ class TrueFoundryClient:
         return headers
 
     async def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self.settings.tfy_base_url}{path}"
+        url = f"{self.settings.tfy_control_plane_url}{path}"
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(url, json=payload, headers=self._headers())
             response.raise_for_status()
