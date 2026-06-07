@@ -37,16 +37,11 @@ button{font-family:inherit;cursor:pointer;}
 .source .ic{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:#fff;font-size:10px;font-weight:700;flex-shrink:0;}
 .source .ok{margin-left:auto;color:var(--ok);font-size:14px;}
 
-/* ---- Top bar ---- */
+/* ---- Main column ---- */
 /* The scroll port is the full-width .main so its scrollbar sits at the page
-   edge, not hugging the centered narrow column. */
+   edge, not hugging the centered narrow column. The design's console chrome is
+   sidebar-only — section content fills .main directly with no topbar. */
 .main{display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;}
-.topbar{display:flex;align-items:center;gap:14px;padding:12px 24px;border-bottom:1px solid var(--border);background:rgba(247,244,238,0.8);backdrop-filter:blur(8px);position:sticky;top:0;z-index:20;}
-.topbar .crumb{font-size:14px;color:var(--ink-3);}
-.topbar .crumb b{color:var(--ink);font-weight:600;}
-.search{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:7px 12px;width:300px;flex-shrink:0;white-space:nowrap;color:var(--ink-4);font-size:13.5px;}
-.search i{font-size:16px;}
-.tb-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
 .icon-btn{width:36px;height:36px;border-radius:var(--r-md);border:1px solid var(--border);background:var(--surface);display:grid;place-items:center;color:var(--ink-2);font-size:17px;position:relative;}
 .icon-btn:hover{background:var(--surface-2);}
 .icon-btn .badge{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:var(--crit);border:2px solid var(--paper);}
