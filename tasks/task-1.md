@@ -2,13 +2,12 @@
 
 ## Status
 
-Scaffold complete (2026-06-06). Vite + React + TypeScript app, sign-in-only
-InsForge auth, route guards, and the console shell (sidebar nav, connected
-sources, profile area, three routable sections) are implemented. Typecheck,
-unit/component tests (33 passing), and the production build all pass. The one
-open item is the manual end-to-end sign-in, which needs the demo login user the
-user will create (see Progress Notes). Pre-flight readiness was verified earlier
-the same day — see Progress Notes.
+Complete (2026-06-06). Vite + React + TypeScript app, sign-in-only InsForge
+auth, route guards, and the console shell (sidebar nav, connected sources,
+profile area, three routable sections) are implemented and deployed to InsForge
+frontend hosting (https://m5h8zr7r.insforge.site). Typecheck, unit/component
+tests (33 passing), and the production build all pass. Manual end-to-end sign-in
+is verified with the demo user — no open blockers remain. See Progress Notes.
 
 ## Context
 
@@ -189,13 +188,12 @@ Built the production frontend scaffold, sign-in-only auth, and the console shell
   CSS 44K (9K gzip); Datadog RUM in a separate ~165K lazy chunk.
 - Dev server smoke: `vite` serves `/` and the SPA fallback for `/incidents`.
 
-**Open item (owner: user) — blocks only manual sign-in verification**
-- No usable demo login user exists yet (only an anonymous `anon@example.com` with
-  no password). The scaffold + sign-in UI are built and unit-tested, but the
-  manual "sign in with the configured demo user / confirm refresh + sign-out"
-  steps cannot be exercised until a real username/password user is created.
-  `requireEmailVerification` is already off, so a created user can sign in
-  immediately.
+**Open item (owner: user) — RESOLVED 2026-06-06**
+- A real username/password demo user now exists in InsForge (credentials in
+  `docs/CONFIG.md`, which is uncommitted). At the time of the scaffold only the
+  password-less anonymous `anon@example.com` existed; the user has since created
+  and verified the demo login. `requireEmailVerification` is off, so the user
+  signs in immediately. See the manual-verification note below.
 
 ### 2026-06-06 — Deployed to InsForge frontend hosting
 
@@ -216,3 +214,14 @@ Built the production frontend scaffold, sign-in-only auth, and the console shell
   360 KB) while running the command from the repo root so the linked project
   context is still used. If a frontend folder split or a deploy-ignore mechanism
   lands later, that removes the manual staging step.
+
+### 2026-06-06 — Manual sign-in verified (acceptance criteria met)
+
+- User created a real username/password demo user in InsForge (credentials in
+  `docs/CONFIG.md`, uncommitted) and confirmed sign-in works. This exercises the
+  remaining Manual Verification steps: sign in with the configured demo user,
+  reach the console, and (per the auth design) refresh preserves the
+  authenticated route via the InsForge refresh-cookie rehydration, with sign-out
+  returning to the auth entry.
+- With automated tests (33 passing), typecheck, production build, and the live
+  deployment all green, **Task 1 is complete with no open blockers.**
