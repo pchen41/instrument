@@ -8,6 +8,9 @@ import { sha256Hex } from './hash';
 import { scrubSecrets } from './redaction';
 import { schemaRegistry, z } from './schema-validation';
 
+// ADDED: import logger for structured logging
+import { logger } from './logger';
+
 export const DD_MONITOR_SPEC_VERSION = 'datadog_monitor_spec.v1';
 
 // The approved monitor definition (set on the recommendation step by the analysis
@@ -89,6 +92,20 @@ export interface DraftMonitorPayload {
  * `source:instrument` + `instrument:draft` so it's recoverable and clearly owned.
  */
 export function buildDraftMonitor(spec: DdMonitorSpec, recommendationTitle: string, recommendationId: string, stepKey: string | null): DraftMonitorPayload {
+  // ADDED: structured debug log for derived query details
+  const thresholds = extractThresholds(spec.query);
+  const comparatorMatch = /([<>]=?)\s*-?\d+(?:\.\d+)?\s*$/.exec(spec.query.trim());
+  const comparator = comparatorMatch ? comparatorMatch[1] : 'unknown';
+  const threshold = thresholds.critical ?? null;
+  
+  logger.debug('derived monitor query details', {
+    original_metric: spec.metric_name,
+    derived_query: spec.query,
+    comparator,
+    threshold,
+    derivation_strategy: 'metric_based'
+  });
+  
   const marker = monitorMarkerTag(recommendationId, stepKey);
   // System/marker tags FIRST so the 20-tag cap can never slice off the marker
   // (which findMonitorByTag relies on for crash-resume) or the draft/ownership labels.
@@ -116,7 +133,7 @@ export function buildDraftMonitor(spec: DdMonitorSpec, recommendationTitle: stri
     tags,
     // Conservative defaults: don't alert on missing data and require a clear
     // recovery window — a reviewer tunes these before publishing.
-    options: { notify_no_data: false, renotify_interval: 0, thresholds: extractThresholds(spec.query) },
+    options: { notify_no_data: false, renotify_interval: 0, thresholds },
   };
 }
 
