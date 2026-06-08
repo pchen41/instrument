@@ -27,6 +27,7 @@ export const SECRET_VALUE_PATTERNS: RegExp[] = [
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/, // Slack
   /\bAKIA[0-9A-Z]{16}\b/, // AWS access key id
   /\bglpat-[A-Za-z0-9_-]{20,}/, // GitLab PAT
+  /\bAIza[0-9A-Za-z_-]{35}/, // Google API key (e.g. embedded in a gateway span-name URL)
 ];
 
 /** True if the string contains a value shaped like a known provider secret. */

@@ -283,7 +283,11 @@ function parseRequestLogs(text: string): TfFact | null {
     const sample = rows
       .slice(0, 5)
       .map((r) => {
-        const name = scrubSecrets(String(r?.spanName ?? r?.name ?? '')).slice(0, 80);
+        // Span names are full provider URLs; the query string can carry a key
+        // (e.g. Google's ?key=AIza…), so drop it before sampling. scrubSecrets is
+        // the defense-in-depth backstop for any credential left in the path.
+        const rawName = String(r?.spanName ?? r?.name ?? '').split('?')[0];
+        const name = scrubSecrets(rawName).slice(0, 80);
         const svc = r?.serviceName ? ` @${scrubSecrets(String(r.serviceName)).slice(0, 40)}` : '';
         const status = r?.statusCode != null ? ` [${String(r.statusCode).slice(0, 20)}]` : '';
         return `${name}${svc}${status}`.trim();

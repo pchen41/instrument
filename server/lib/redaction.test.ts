@@ -8,6 +8,7 @@ describe('isSecretValue — catches embedded tokens (not just ^-anchored)', () =
     expect(isSecretValue('Authorization: Bearer eyJabcdefgh.payloadpart.sigpart')).toBe(true);
     expect(isSecretValue('eyJhbGciOiJSUzI1NiIs.eyJzdWIiOiJ4.signature_here')).toBe(true); // JWT mid-/start
     expect(isSecretValue('use key sk-proj-ABCDEFGHIJKLMNOPQRSTUV here')).toBe(true); // sk-proj
+    expect(isSecretValue('https://example.googleapis.com/v1/models/x?key=AIzaEXAMPLE_FAKE_GOOGLE_KEY_do_not_use_0')).toBe(true); // Google API key shape in a span-name URL (synthetic key)
   });
   it('does not flag ordinary strings', () => {
     expect(isSecretValue('task-runner')).toBe(false); // not an sk- key

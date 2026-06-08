@@ -70,7 +70,7 @@ const ERD_TOOLS = {
 
 // --- secret-leak guard (mirror of server/lib/redaction.ts) --------------------
 const SECRET_KEY = /(token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|private[_-]?key|(^|[_-])key$|authorization|bearer|(^|[_-])pat$)/i;
-const SECRET_VALUE = [/\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/i, /\bgh[pousr]_[A-Za-z0-9]{20,}/, /\bgithub_pat_[A-Za-z0-9_]{20,}/, /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}/, /\bsk-[A-Za-z0-9-]{20,}/, /\bxox[baprs]-[A-Za-z0-9-]{10,}/, /\bAKIA[0-9A-Z]{16}\b/, /\bglpat-[A-Za-z0-9_-]{20,}/];
+const SECRET_VALUE = [/\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*/i, /\bgh[pousr]_[A-Za-z0-9]{20,}/, /\bgithub_pat_[A-Za-z0-9_]{20,}/, /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,}/, /\bsk-[A-Za-z0-9-]{20,}/, /\bxox[baprs]-[A-Za-z0-9-]{10,}/, /\bAKIA[0-9A-Z]{16}\b/, /\bglpat-[A-Za-z0-9_-]{20,}/, /\bAIza[0-9A-Za-z_-]{35}/];
 function findSecretLike(node, p = '', hits = []) {
   if (node == null) return hits;
   if (typeof node === 'string') { if (SECRET_VALUE.some((re) => re.test(node))) hits.push(p); return hits; }
