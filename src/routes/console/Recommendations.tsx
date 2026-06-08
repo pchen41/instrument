@@ -430,6 +430,16 @@ function StepAction({
   }
 
   if (step.state === 'failed') {
+    // A failure is never a dead end: open the progress slideout, which shows what
+    // failed and offers a Retry (re-runs the same durable job / regenerates).
+    if (step.kind === 'code_pr' || step.kind === 'datadog_new_monitor') {
+      return (
+        <button type="button" className="btn btn-secondary btn-sm" style={{ color: 'var(--crit-ink)' }} onClick={() => onOpen({ kind: 'progress', rec, step })}>
+          <Icon name="warning" />
+          Failed — retry
+        </button>
+      );
+    }
     return (
       <span className="rs-locked" style={{ color: 'var(--crit-ink)' }}>
         <Icon name="warning" />
