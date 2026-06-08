@@ -8,6 +8,9 @@ import { sha256Hex } from './hash';
 import { scrubSecrets } from './redaction';
 import { schemaRegistry, z } from './schema-validation';
 
+// Added for instrumentation
+import { metrics } from '../observability/metrics';
+
 export const DD_MONITOR_SPEC_VERSION = 'datadog_monitor_spec.v1';
 
 // The approved monitor definition (set on the recommendation step by the analysis
@@ -89,35 +92,53 @@ export interface DraftMonitorPayload {
  * `source:instrument` + `instrument:draft` so it's recoverable and clearly owned.
  */
 export function buildDraftMonitor(spec: DdMonitorSpec, recommendationTitle: string, recommendationId: string, stepKey: string | null): DraftMonitorPayload {
-  const marker = monitorMarkerTag(recommendationId, stepKey);
-  // System/marker tags FIRST so the 20-tag cap can never slice off the marker
-  // (which findMonitorByTag relies on for crash-resume) or the draft/ownership labels.
-  const required = ['source:instrument', 'instrument:draft', marker];
-  const userTags = (spec.tags ?? []).filter((t) => !required.includes(t));
-  const tags = Array.from(new Set([...required, ...userTags])).slice(0, 20);
-  // The draft contract is "Instrument adds NO notification routing". Datadog routes
-  // on @handles in the message, so neutralize any @ in analyst-supplied text — a
-  // draft must never page anyone, even if the spec message contains an @-mention.
-  const analystMessage = spec.message ? noMentions(scrubSecrets(spec.message)).slice(0, 1200) : undefined;
-  const message = [
-    DRAFT_MARKER,
-    `Draft monitor proposed by Instrument for the recommendation: ${noMentions(scrubSecrets(recommendationTitle)).slice(0, 200)}.`,
-    'It has no notification routing and will not page anyone until a human publishes it.',
-    analystMessage ? '' : undefined,
-    analystMessage,
-  ]
-    .filter((l): l is string => typeof l === 'string')
-    .join('\n');
-  return {
-    name: scrubSecrets(spec.name).slice(0, 200),
-    type: spec.monitor_type,
-    query: spec.query,
-    message,
-    tags,
-    // Conservative defaults: don't alert on missing data and require a clear
-    // recovery window — a reviewer tunes these before publishing.
-    options: { notify_no_data: false, renotify_interval: 0, thresholds: extractThresholds(spec.query) },
-  };
+  try {
+    const marker = monitorMarkerTag(recommendationId, stepKey);
+    // System/marker tags FIRST so the 20-tag cap can never slice off the marker
+    // (which findMonitorByTag relies on for crash-resume) or the draft/ownership labels.
+    const required = ['source:instrument', 'instrument:draft', marker];
+    const userTags = (spec.tags ?? []).filter((t) => !required.includes(t));
+    const tags = Array.from(new Set([...required, ...userTags])).slice(0, 20);
+    // The draft contract is "Instrument adds NO notification routing". Datadog routes
+    // on @handles in the message, so neutralize any @ in analyst-supplied text — a
+    // draft must never page anyone, even if the spec message contains an @-mention.
+    const analystMessage = spec.message ? noMentions(scrubSecrets(spec.message)).slice(0, 1200) : undefined;
+    const message = [
+      DRAFT_MARKER,
+      `Draft monitor proposed by Instrument for the recommendation: ${noMentions(scrubSecrets(recommendationTitle)).slice(0, 200)}.`,
+      'It has no notification routing and will not page anyone until a human publishes it.',
+      analystMessage ? '' : undefined,
+      analystMessage,
+    ]
+      .filter((l): l is string => typeof l === 'string')
+      .join('\n');
+    const result = {
+      name: scrubSecrets(spec.name).slice(0, 200),
+      type: spec.monitor_type,
+      query: spec.query,
+      message,
+      tags,
+      // Conservative defaults: don't alert on missing data and require a clear
+      // recovery window — a reviewer tunes these before publishing.
+      options: { notify_no_data: false, renotify_interval: 0, thresholds: extractThresholds(spec.query) },
+    };
+    
+    // Track successful derivation outcome
+    metrics.increment('datadog.draft_monitor.derivation_result', {
+      success: 'true',
+      error_type: '',
+    });
+    
+    return result;
+  } catch (error) {
+    // Track failed derivation outcome
+    metrics.increment('datadog.draft_monitor.derivation_result', {
+      success: 'false',
+      error_type: error instanceof Error ? error.constructor.name : 'unknown',
+    });
+    
+    throw error;
+  }
 }
 
 /** Neutralize Datadog @-mention routing tokens so a draft message can never page. */
