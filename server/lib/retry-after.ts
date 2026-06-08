@@ -17,7 +17,8 @@ export function retryAfterMs(header: string | null | undefined, fallbackMs = 100
 
     // Form 1: a delay expressed in whole seconds.
     if (/^\d+$/.test(trimmed)) {
-      return Number(trimmed) * SECONDS;
+      const seconds = Number(trimmed);
+      return seconds * SECONDS;
     }
 
     // Form 2: an HTTP-date — back off until that moment.
@@ -26,8 +27,9 @@ export function retryAfterMs(header: string | null | undefined, fallbackMs = 100
       throw new Error(`unparseable Retry-After value: ${trimmed}`);
     }
     return Math.max(0, when - Date.now());
-  } catch {
+  } catch (error) {
     // Couldn't parse the header — back off by the default and carry on.
+    console.warn(`Failed to parse Retry-After header: ${header}`, { error: error.message });
     return fallbackMs;
   }
 }
