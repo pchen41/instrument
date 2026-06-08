@@ -27,7 +27,7 @@ type Client = typeof insforge;
 
 // Default poll cadence while work is active. Fast enough that a running
 // investigation feels live, only active while there is in-flight work to watch.
-export const DEFAULT_POLL_MS = 2000;
+export const DEFAULT_POLL_MS = 1000;
 
 export interface PollResult<T> {
   /** Latest successful payload, or null before the first load resolves. */
