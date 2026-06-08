@@ -26,7 +26,8 @@ export function retryAfterMs(header: string | null | undefined, fallbackMs = 100
       throw new Error(`unparseable Retry-After value: ${trimmed}`);
     }
     return Math.max(0, when - Date.now());
-  } catch {
+  } catch (error) {
+    console.error(`Failed to parse Retry-After header: "${header}". Error:`, error);
     // Couldn't parse the header — back off by the default and carry on.
     return fallbackMs;
   }
