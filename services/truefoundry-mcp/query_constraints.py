@@ -281,6 +281,12 @@ def build_spans_payload(
     if trace_id:
         cleaned_filters.append({"spanFieldName": "traceId", "operator": "IN", "value": [trace_id]})
 
+    # The TrueFoundry spans API requires at least one of tracingProjectFqn /
+    # dataRoutingDestination. When neither is configured, route to the "default"
+    # destination so the demo tools return spans instead of a 400.
+    if not tracing_project_fqn and not data_routing_destination:
+        data_routing_destination = "default"
+
     payload: dict[str, Any] = {
         "startTime": bounded_start,
         "endTime": bounded_end,

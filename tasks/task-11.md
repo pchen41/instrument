@@ -4,11 +4,24 @@
 
 **Done + live-proven (2026-06-07).** The `incident_investigation` job runs a
 READ-ONLY, evidence-backed RCA: it gathers verified signals through the federated
-`instrument-investigation` MCP (github + datadog read tools, ZERO write tools),
-makes one schema-validated TrueFoundry model call to rank hypotheses, then resolves
-every cited evidence key to a verified `evidence_items` id before writing
-`incidents.hypotheses`. Reviewed by Gemini + Codex (Claude hung); HIGH/MED/LOW
+`instrument-investigation` MCP (github + datadog + TrueFoundry read tools, ZERO
+write tools), makes one schema-validated TrueFoundry model call to rank hypotheses,
+then resolves every cited evidence key to a verified `evidence_items` id before
+writing `incidents.hypotheses`. Reviewed by Gemini + Codex (Claude hung); HIGH/MED/LOW
 applied.
+
+**TrueFoundry telemetry now consumed (2026-06-08).** Originally TrueFoundry was
+always recorded as `unavailable` (its obs MCP was a separate, unwired server). The
+obs MCP's tools were then federated into the `instrument-investigation` server
+(suffix `_truefsd`), so the gather phase now pulls bounded AI-gateway reliability
+telemetry through the SAME read-only server + `TRUEFOUNDRY_API_KEY`: model metrics
+(per-model count / p99 latency / cost) and MCP metrics (gateway request volume),
+persisted as verified `truefoundry_metric` evidence the hypotheses model may cite;
+request logs are best-effort. If the TF tools aren't federated or every call fails,
+the `unavailable` marker + degrade path still apply. Live-proven 2026-06-08: a real
+investigation gathered 2 verified `truefoundry_metric` rows (31 model calls,
+gemini-3.5-flash p99 14.3s/$0.33; 625 MCP requests) and the leading hypothesis cited
+both. Reviewed by Codex + Claude (Gemini skipped); HIGH/MED + cheap LOW applied.
 
 - Files: `server/lib/agent-investigate.ts` (pure core + `incident_hypotheses.v1`
   schema + executor), `server/functions/_shared/investigate-store.ts` (read-only
@@ -23,10 +36,10 @@ applied.
   (model call valid against `incident_hypotheses.v1`) → summarize. The leading
   hypothesis cited 8 verified evidence ids, confidence `low` (not over-claimed),
   `instrument_can_fix=false` with a folded no-fix reason + suggested next step.
-- Graceful degradation proven: the TrueFoundry observability MCP is unreachable
-  from the worker (no `MCP_AUTH_TOKEN`), so its telemetry is recorded as
-  `unavailable` evidence and the Datadog/GitHub-backed investigation still
-  completes. Invalid model output falls back to a single low-confidence
+- Graceful degradation proven: when no TrueFoundry telemetry is available (the TF
+  tools aren't federated or every bounded call errors/returns empty), the source is
+  recorded as `unavailable` evidence and the Datadog/GitHub-backed investigation
+  still completes. Invalid model output falls back to a single low-confidence
   "inconclusive" hypothesis (never a crash, never a fabricated cause).
 - The investigation is read-only by construction: the federated MCP has 0 write
   tools and the adapter fails closed unless the server advertises a non-empty
@@ -140,3 +153,22 @@ not be deferred past this investigation task.
 - **Worker gate:** real investigations (`trigger_summary.source` ∈ {console,
   datadog_alert}) own their write-back; the 5A placeholder `finalizeIncident` only
   runs for seeded/simulated jobs (and now uses a valid `finding` timeline kind).
+- **TrueFoundry telemetry tools (2026-06-08):** the gather phase calls, through the
+  federated server, `query_truefoundry_model_metrics_truefsd` (distribution,
+  camelCase columns `modelName`/`latencyMs`/`costInUSD`, `group_by:[modelName]`),
+  `query_truefoundry_mcp_metrics_truefsd` (count of method), and best-effort
+  `search_truefoundry_request_logs_truefsd`. Bounded to a ≤6h window (the tools
+  reject longer). Each call is best-effort (`InvestigateMcp.truefoundryTelemetry`
+  returns the gathered `TfFact[]`; an individual tool error degrades that source).
+  `tfAvailable(facts)` (any verified `truefoundry_metric`/`truefoundry_log`)
+  replaces the old env-token check and drives the prompt note + summary. New store
+  method `saveTruefoundryEvidence` (subject keys `inv:tf_model|tf_mcp|tf_log:<id>`,
+  idempotent). Parsers degrade to `null` on an all-zero/unparseable count so a
+  misleading "0 calls" verified fact is never written.
+- **MCP-server fix (`services/truefoundry-mcp`):** the TF spans API requires a
+  `tracingProjectFqn` OR `dataRoutingDestination`; the live deploy had neither set,
+  so `search_truefoundry_request_logs` 400'd. `build_spans_payload` now defaults
+  `dataRoutingDestination` to `"default"` when neither is configured (never
+  overriding an explicit FQN). Live-verified against the real control plane: HTTP
+  200 with spans. Requires a Render redeploy to take effect; model + MCP metrics
+  already work without it.

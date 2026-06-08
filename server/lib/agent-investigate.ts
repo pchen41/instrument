@@ -12,9 +12,10 @@
 //   triage         — load the incident; resolve the service's repo + the alert's
 //                    trace/request ids. No model call, no write.
 //   gather_signals — best-effort MCP reads → persist commit / trace / log evidence
-//                    (verified facts) + a single `unavailable` row for TrueFoundry
-//                    telemetry when its obs MCP isn't reachable. A flaky/absent
-//                    source DEGRADES (recorded) rather than failing the job.
+//                    plus bounded TrueFoundry AI-gateway telemetry (model + MCP
+//                    metrics) as verified facts; when TrueFoundry telemetry isn't
+//                    reachable a single `unavailable` row is recorded instead. A
+//                    flaky/absent source DEGRADES (recorded) rather than failing.
 //   correlate      — derive `incidents.correlated_changes` from the commit evidence.
 //   hypotheses     — one `agent_chat_completions` call over the incident + the
 //                    enumerated evidence → validated ranked hypotheses (persisted
@@ -160,13 +161,33 @@ export interface SignalFact {
   observedAt: string | null;
 }
 
+/** A bounded TrueFoundry AI-gateway reliability fact (model/MCP metrics or request logs). */
+export interface TfFact {
+  kind: 'model_metric' | 'mcp_metric' | 'request_log';
+  externalId: string;
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  observedAt: string | null;
+}
+
+/** A bounded [start,end] window (ISO 8601) for TrueFoundry telemetry reads. */
+export interface TfWindow {
+  start: string;
+  end: string;
+}
+
 /** Read-only investigation MCP (the federated `instrument-investigation` server). */
 export interface InvestigateMcp {
   recentCommits(repo: RepoRef): Promise<CommitFact[]>;
   getTrace(traceId: string): Promise<SignalFact | null>;
   searchServiceLogs(service: string, traceId: string | null): Promise<SignalFact | null>;
-  /** Whether TrueFoundry's observability MCP is reachable from the worker. */
-  truefoundryAvailable(): boolean;
+  /** Bounded TrueFoundry AI-gateway reliability telemetry (model + MCP metrics,
+   *  best-effort request logs) over the window, read through the SAME federated
+   *  read-only server. Returns [] when the TF tools aren't federated or every call
+   *  fails — the caller then records the source as unavailable, so a Datadog/GitHub
+   *  RCA still completes. */
+  truefoundryTelemetry(window: TfWindow): Promise<TfFact[]>;
 }
 
 /** One verified fact offered to the model, with the stable key it cites. */
@@ -187,6 +208,8 @@ export interface InvestigateStore {
   loadRepo(workspaceId: string, serviceName: string | null): Promise<RepoRef | null>;
   saveCommitEvidence(args: { ctx: InvestigationContext; incidentId: string; commit: CommitFact; now: string }): Promise<void>;
   saveSignalEvidence(args: { ctx: InvestigationContext; incidentId: string; sourceType: 'datadog_trace' | 'datadog_log'; fact: SignalFact; now: string }): Promise<void>;
+  /** Persist a gathered TrueFoundry telemetry fact as verified evidence (truefoundry_metric/log). Idempotent. */
+  saveTruefoundryEvidence(args: { ctx: InvestigationContext; incidentId: string; fact: TfFact; now: string }): Promise<void>;
   /** Persist the degraded TrueFoundry-telemetry marker (verification_state 'unavailable'). Idempotent. */
   saveUnavailableTruefoundry(args: { ctx: InvestigationContext; incidentId: string; now: string }): Promise<void>;
   /** Verified fact rows for this incident (alert events + gathered), enumerated E1.. deterministically. */
@@ -305,11 +328,29 @@ async function gather(deps: InvestigateDeps, ctx: InvestigationContext, now: () 
     if (logs) await deps.store.saveSignalEvidence({ ctx, incidentId: incident.id, sourceType: 'datadog_log', fact: logs, now: now().toISOString() });
   }
 
-  // TrueFoundry: its observability MCP needs a token the worker doesn't carry, so
-  // surface the missing source as `unavailable` evidence (not a hard failure).
-  if (!deps.mcp.truefoundryAvailable()) {
+  // TrueFoundry: bounded AI-gateway reliability telemetry (model + MCP metrics)
+  // through the SAME read-only federated MCP. Persist what's reachable as verified
+  // `truefoundry_metric` evidence; if nothing is reachable (the TF tools aren't
+  // federated, or every call errors) record the source as `unavailable` so the RCA
+  // still completes on Datadog/GitHub evidence. All writes are idempotent.
+  const tfFacts = (await safe(() => deps.mcp.truefoundryTelemetry(tfWindow(now())))) ?? [];
+  for (const fact of tfFacts) {
+    await deps.store.saveTruefoundryEvidence({ ctx, incidentId: incident.id, fact, now: now().toISOString() });
+  }
+  if (tfFacts.length === 0) {
     await deps.store.saveUnavailableTruefoundry({ ctx, incidentId: incident.id, now: now().toISOString() });
   }
+}
+
+/** TrueFoundry telemetry tools cap the window at ≤6h; read the trailing ~6h. */
+const TF_WINDOW_MS = 6 * 60 * 60 * 1000 - 60_000;
+function tfWindow(end: Date): TfWindow {
+  return { start: new Date(end.getTime() - TF_WINDOW_MS).toISOString(), end: end.toISOString() };
+}
+
+/** Whether any verified TrueFoundry telemetry was gathered (drives the prompt note + summary). */
+function tfAvailable(facts: EvidenceFact[]): boolean {
+  return facts.some((f) => f.sourceType === 'truefoundry_metric' || f.sourceType === 'truefoundry_log');
 }
 
 /** correlate: derive correlated_changes from the gathered commit evidence. */
@@ -333,7 +374,7 @@ async function hypotheses(deps: InvestigateDeps, ctx: InvestigationContext, jobI
       purpose: HYPOTHESES_PURPOSE,
       request: {
         apiSurface: 'agent_chat_completions',
-        messages: buildInvestigationMessages(incident, facts, deps.mcp.truefoundryAvailable()),
+        messages: buildInvestigationMessages(incident, facts, tfAvailable(facts)),
         // gemini-3.5-flash is a reasoning model that spends output tokens on a
         // preamble before the JSON; a tight cap truncates the JSON → invalid. 3000
         // is the proven budget for this model (Tasks 6/9).
@@ -362,7 +403,7 @@ async function summarize(deps: InvestigateDeps, ctx: InvestigationContext, jobId
   // Resolve citations against the SNAPSHOT the model was shown, so a later evidence
   // change can never re-point a hypothesis to the wrong verified evidence id.
   const hyps = selectHypotheses(loaded.output.hypotheses, loaded.facts);
-  const summary = summaryText(loaded.output, hyps, deps.mcp.truefoundryAvailable());
+  const summary = summaryText(loaded.output, hyps, tfAvailable(loaded.facts));
   const addSignals = investigationSignals(hyps, loaded.facts);
   await deps.store.writeHypotheses({ incidentId: incident.id, hypotheses: hyps, summary, addSignals, now: now().toISOString() });
 }
@@ -404,7 +445,7 @@ export function buildInvestigationMessages(incident: IncidentContext, facts: Evi
   const factLines = facts.length
     ? facts.map((f) => `${f.key} [${FACT_LABEL[f.sourceType] ?? f.sourceType}] ${f.title}: ${f.summary}${f.externalId ? ` (${f.externalId})` : ''}`).join('\n')
     : '(no corroborating evidence was collected)';
-  const tfNote = truefoundryAvailable ? '' : '\nUnavailable sources: TrueFoundry model/MCP telemetry was not reachable for this investigation — do not assert facts about it.';
+  const tfNote = truefoundryAvailable ? '' : '\nUnavailable sources: no TrueFoundry model/MCP telemetry was available for this investigation — do not assert facts about it.';
 
   const user =
     `Incident: ${incident.title}\n` +

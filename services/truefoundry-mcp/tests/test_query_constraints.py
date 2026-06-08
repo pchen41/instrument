@@ -112,6 +112,50 @@ class QueryConstraintTests(unittest.TestCase):
         self.assertEqual(payload["filters"], [{"spanFieldName": "traceId", "operator": "IN", "value": ["trace-123"]}])
         self.assertEqual(payload["limit"], 5)
 
+    def test_spans_payload_defaults_routing_destination(self):
+        # With neither a tracing project FQN nor a routing destination configured,
+        # the spans API requires one — default to "default" so the call succeeds.
+        payload = build_spans_payload(
+            start_time="2026-06-06T10:00:00Z",
+            end_time="2026-06-06T10:30:00Z",
+            max_hours=6,
+            max_limit=50,
+            limit=5,
+        )
+
+        self.assertEqual(payload["dataRoutingDestination"], "default")
+        self.assertNotIn("tracingProjectFqn", payload)
+
+    def test_spans_payload_keeps_explicit_tracing_project(self):
+        # An explicitly configured tracing project FQN is respected and the routing
+        # destination is NOT forced to "default".
+        payload = build_spans_payload(
+            start_time="2026-06-06T10:00:00Z",
+            end_time="2026-06-06T10:30:00Z",
+            max_hours=6,
+            max_limit=50,
+            tracing_project_fqn="tenant:tracing-project:tfy-default",
+            limit=5,
+        )
+
+        self.assertEqual(payload["tracingProjectFqn"], "tenant:tracing-project:tfy-default")
+        self.assertNotIn("dataRoutingDestination", payload)
+
+    def test_spans_payload_keeps_explicit_routing_destination(self):
+        # An explicitly configured routing destination is kept as-is and the default
+        # block is a no-op (no tracingProjectFqn is injected).
+        payload = build_spans_payload(
+            start_time="2026-06-06T10:00:00Z",
+            end_time="2026-06-06T10:30:00Z",
+            max_hours=6,
+            max_limit=50,
+            data_routing_destination="prod",
+            limit=5,
+        )
+
+        self.assertEqual(payload["dataRoutingDestination"], "prod")
+        self.assertNotIn("tracingProjectFqn", payload)
+
 
 if __name__ == "__main__":
     unittest.main()

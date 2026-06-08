@@ -9,6 +9,7 @@ import {
   type RepoRef,
   type SignalFact,
   type StoredHypothesis,
+  type TfFact,
   INVESTIGATION_SCHEMA_VERSION,
   buildCorrelatedChanges,
   buildInvestigationMessages,
@@ -241,6 +242,11 @@ class FakeStore implements InvestigateStore {
     this.calls.push(`saveSignalEvidence:${sourceType}`);
     this.evidenceRows.push({ id: UUID(this.idc++), jobId: UUID(1), subjectKey: fact.externalId, sourceType, verified: true });
   }
+  async saveTruefoundryEvidence({ fact }: { fact: TfFact }) {
+    this.calls.push('saveTruefoundryEvidence');
+    const sourceType = fact.kind === 'request_log' ? 'truefoundry_log' : 'truefoundry_metric';
+    this.evidenceRows.push({ id: UUID(this.idc++), jobId: UUID(1), subjectKey: `tf:${fact.kind}`, sourceType, verified: true });
+  }
   async saveUnavailableTruefoundry() {
     this.calls.push('saveUnavailableTruefoundry');
     this.evidenceRows.push({ id: UUID(this.idc++), jobId: UUID(1), subjectKey: 'tf', sourceType: 'truefoundry_metric', verified: false });
@@ -277,6 +283,8 @@ class FakeStore implements InvestigateStore {
 }
 
 class FakeMcp implements InvestigateMcp {
+  // tf defaults to [] → TrueFoundry telemetry unavailable (the degrade path).
+  constructor(private tf: TfFact[] = []) {}
   async recentCommits(): Promise<CommitFact[]> {
     return [{ sha: 'a1b2c3d', message: 'raise pool size', author: 'pat', url: 'https://github.com/pchen41/instrument/commit/a1b2c3d', committedAt: null }];
   }
@@ -286,10 +294,12 @@ class FakeMcp implements InvestigateMcp {
   async searchServiceLogs(): Promise<SignalFact | null> {
     return { externalId: 'dd_logs:instrument-worker', title: 'logs', summary: '3 errors', uri: null, payload: {}, observedAt: null };
   }
-  truefoundryAvailable() {
-    return false;
+  async truefoundryTelemetry(): Promise<TfFact[]> {
+    return this.tf;
   }
 }
+
+const TF_MODEL_FACT: TfFact = { kind: 'model_metric', externalId: 'tf_model_metrics', title: 'TrueFoundry AI Gateway — model metrics (6h)', summary: '31 model call(s) across 2 model(s)', payload: { total_calls: 31 }, observedAt: null };
 
 async function runAll(store: FakeStore, mcp: InvestigateMcp, gateway: AgentInvoker, j = job()) {
   const exec = makeInvestigateExecutor({ gateway, modelStore: new FakeModelStore(), mcp, store, now: () => new Date('2026-06-07T01:00:00.000Z') });
@@ -328,6 +338,17 @@ describe('makeInvestigateExecutor (end to end)', () => {
     expect(store.written.summary).toContain('TrueFoundry telemetry was unavailable');
   });
 
+  it('gathers TrueFoundry telemetry as verified evidence when the federated tools are available', async () => {
+    const store = new FakeStore();
+    await runAll(store, new FakeMcp([TF_MODEL_FACT]), new FakeGateway(GOOD_OUTPUT));
+    // gather persisted a verified truefoundry_metric row instead of the degraded marker.
+    expect(store.calls).toContain('saveTruefoundryEvidence');
+    expect(store.calls).not.toContain('saveUnavailableTruefoundry');
+    expect(store.evidenceRows.some((r) => r.sourceType === 'truefoundry_metric' && r.verified)).toBe(true);
+    // the summary no longer reports TrueFoundry as unavailable.
+    expect(store.written.summary).not.toContain('unavailable');
+  });
+
   it('every displayed evidence id points to a real verified evidence item', async () => {
     const store = new FakeStore();
     await runAll(store, new FakeMcp(), new FakeGateway(GOOD_OUTPUT));
@@ -360,7 +381,7 @@ describe('makeInvestigateExecutor (end to end)', () => {
     // The InvestigateStore/Mcp surfaces expose NO branch/PR/monitor/approval/job
     // creation; assert every recorded call is a read, an evidence write, or an
     // incident write-back.
-    const allowed = new Set(['loadIncident', 'loadRepo', 'saveCommitEvidence', 'saveSignalEvidence:datadog_trace', 'saveSignalEvidence:datadog_log', 'saveUnavailableTruefoundry', 'saveHypothesesOutput', 'writeCorrelatedChanges', 'writeHypotheses']);
+    const allowed = new Set(['loadIncident', 'loadRepo', 'saveCommitEvidence', 'saveSignalEvidence:datadog_trace', 'saveSignalEvidence:datadog_log', 'saveTruefoundryEvidence', 'saveUnavailableTruefoundry', 'saveHypothesesOutput', 'writeCorrelatedChanges', 'writeHypotheses']);
     for (const c of store.calls) expect(allowed.has(c)).toBe(true);
   });
 });

@@ -21,6 +21,8 @@ import {
   type InvestigationOutput,
   type RepoRef,
   type SignalFact,
+  type TfFact,
+  type TfWindow,
   investigationOutputSchema,
 } from '../../lib/agent-investigate.ts';
 
@@ -38,6 +40,9 @@ const commitKey = (sha: string) => `inv:commit:${sha.slice(0, 40)}`;
 const traceKey = (incidentId: string) => `inv:trace:${incidentId}`;
 const logKey = (incidentId: string) => `inv:log:${incidentId}`;
 const tfKey = (incidentId: string) => `inv:tf_unavailable:${incidentId}`;
+const tfModelKey = (incidentId: string) => `inv:tf_model:${incidentId}`;
+const tfMcpKey = (incidentId: string) => `inv:tf_mcp:${incidentId}`;
+const tfLogKey = (incidentId: string) => `inv:tf_log:${incidentId}`;
 const hypothesesKey = (jobId: string) => `inv:hypotheses:${jobId}`;
 
 // ---- read-only MCP adapter ---------------------------------------------------
@@ -110,12 +115,191 @@ export function createInvestigateMcp(admin: Admin): InvestigateMcp {
         observedAt: null,
       };
     },
-    truefoundryAvailable(): boolean {
-      // The TrueFoundry observability MCP (the Render server) needs an auth token
-      // the worker doesn't carry; when it's absent, telemetry is degraded.
-      return !!(Deno.env.get('INSTRUMENT_OBS_MCP_TOKEN') ?? Deno.env.get('MCP_AUTH_TOKEN'));
+    async truefoundryTelemetry(window: TfWindow): Promise<TfFact[]> {
+      const { client, read } = await io();
+      const facts: TfFact[] = [];
+      // The TrueFoundry observability tools are federated into the SAME read-only
+      // server (suffixed `_truefsd`). When they aren't present we simply gather
+      // nothing → the caller records the source as unavailable. Each call is
+      // best-effort: an individual tool error degrades that source, not the job.
+      if (read.has('query_truefoundry_model_metrics_truefsd')) {
+        const f = await tfModelMetrics(client, window);
+        if (f) facts.push(f);
+      }
+      if (read.has('query_truefoundry_mcp_metrics_truefsd')) {
+        const f = await tfMcpMetrics(client, window);
+        if (f) facts.push(f);
+      }
+      // Request logs: the server injects its own routing destination, so we pass no
+      // filters (a dataRoutingDestination filter key is rejected as a span column).
+      // Best-effort — treat any error as simply "no data".
+      if (read.has('search_truefoundry_request_logs_truefsd')) {
+        const f = await tfRequestLogs(client, window);
+        if (f) facts.push(f);
+      }
+      return facts;
     },
   };
+}
+
+// ---- TrueFoundry telemetry tool calls + parsers ------------------------------
+// All three are best-effort: a non-2xx tool result or unparseable body yields null
+// (degrade-not-fail). The metrics datasources are org-wide AI-gateway reliability
+// signals, surfaced as `truefoundry_metric` evidence the model may cite.
+
+async function tfModelMetrics(client: McpClient, window: TfWindow): Promise<TfFact | null> {
+  try {
+    const res = await client.call('query_truefoundry_model_metrics_truefsd', {
+      start_time: window.start,
+      end_time: window.end,
+      query_type: 'distribution',
+      // camelCase columns per the TrueFoundry model-metrics API (snake_case 400s).
+      aggregations: [
+        { type: 'count', column: 'modelName' },
+        { type: 'p99', column: 'latencyMs' },
+        { type: 'sum', column: 'costInUSD' },
+      ],
+      group_by: ['modelName'],
+      limit: 20,
+    });
+    if (res.isError || !res.text) return null;
+    return parseModelMetrics(res.text);
+  } catch {
+    return null;
+  }
+}
+
+async function tfMcpMetrics(client: McpClient, window: TfWindow): Promise<TfFact | null> {
+  try {
+    const res = await client.call('query_truefoundry_mcp_metrics_truefsd', { start_time: window.start, end_time: window.end, limit: 5 });
+    if (res.isError || !res.text) return null;
+    return parseMcpMetrics(res.text);
+  } catch {
+    return null;
+  }
+}
+
+async function tfRequestLogs(client: McpClient, window: TfWindow): Promise<TfFact | null> {
+  try {
+    const res = await client.call('search_truefoundry_request_logs_truefsd', { start_time: window.start, end_time: window.end, limit: 5 });
+    if (res.isError || !res.text) return null;
+    return parseRequestLogs(res.text);
+  } catch {
+    return null;
+  }
+}
+
+function toNum(v: unknown): number | null {
+  const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+function fmtMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+/** Metric dataPoints land at result.data.dataPoints (live-verified); tolerate a
+ *  flattened result.data array too so a shape drift degrades, never mis-parses. */
+function dataPoints(j: any): any[] {
+  const d = j?.result?.data;
+  if (Array.isArray(d?.dataPoints)) return d.dataPoints;
+  if (Array.isArray(d)) return d;
+  return [];
+}
+
+function parseModelMetrics(text: string): TfFact | null {
+  try {
+    const j = JSON.parse(text);
+    const pts = dataPoints(j);
+    if (pts.length === 0) return null;
+    const ranked = pts
+      .filter((p) => p && (p.modelName || p.countModelName != null || p.total != null))
+      .sort((a, b) => (toNum(b.countModelName ?? b.total) ?? 0) - (toNum(a.countModelName ?? a.total) ?? 0));
+    if (ranked.length === 0) return null;
+    const total = ranked.reduce((s, p) => s + (toNum(p.countModelName ?? p.total) ?? 0), 0);
+    // Symmetric with parseMcpMetrics: an all-zero/unparseable count degrades to
+    // null (→ recorded unavailable) rather than a misleading verified "0 calls" fact.
+    if (!total) return null;
+    const top = ranked.slice(0, 5).map((p) => {
+      const name = scrubSecrets(String(p.modelName ?? 'model')).slice(0, 80);
+      const calls = toNum(p.countModelName ?? p.total) ?? 0;
+      const p99 = toNum(p.p99LatencyMs);
+      const cost = toNum(p.sumCostInUSD);
+      return `${name} ${calls} call(s)${p99 != null ? `, p99 ${fmtMs(p99)}` : ''}${cost != null ? `, $${cost.toFixed(4)}` : ''}`;
+    });
+    return {
+      kind: 'model_metric',
+      externalId: 'tf_model_metrics',
+      title: 'TrueFoundry AI Gateway — model metrics (6h)',
+      summary: `${total} model call(s) across ${ranked.length} model(s); ${top.join('; ')}`,
+      payload: {
+        window_hours: 6,
+        total_calls: total,
+        models: ranked.slice(0, 10).map((p) => ({ model: scrubSecrets(String(p.modelName ?? '')).slice(0, 80), calls: toNum(p.countModelName ?? p.total), p99_latency_ms: toNum(p.p99LatencyMs), cost_usd: toNum(p.sumCostInUSD) })),
+      },
+      observedAt: null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseMcpMetrics(text: string): TfFact | null {
+  try {
+    const j = JSON.parse(text);
+    const pts = dataPoints(j);
+    const total = pts.reduce((s, p) => s + (toNum(p?.countMethod ?? p?.total) ?? 0), 0);
+    if (!total) return null;
+    // Unfiltered MCP metrics include non-tool methods (initialize, tools/list), so
+    // this is "request(s)", not "tool call(s)".
+    return {
+      kind: 'mcp_metric',
+      externalId: 'tf_mcp_metrics',
+      title: 'TrueFoundry AI Gateway — MCP metrics (6h)',
+      summary: `${total} MCP gateway request(s) in the last 6h.`,
+      payload: { window_hours: 6, total_requests: total },
+      observedAt: null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseRequestLogs(text: string): TfFact | null {
+  try {
+    const j = JSON.parse(text);
+    // Live spans land at result.data (array); tolerate a few other shapes.
+    const rows: any[] = Array.isArray(j?.result?.data)
+      ? j.result.data
+      : Array.isArray(j?.result?.data?.spans)
+        ? j.result.data.spans
+        : Array.isArray(j?.result?.spans)
+          ? j.result.spans
+          : Array.isArray(j?.spans)
+            ? j.spans
+            : [];
+    if (rows.length === 0) return null;
+    // Sample only the non-sensitive span shell (name/service/status) — never the
+    // span attributes, which can carry prompt/response text.
+    const errors = rows.filter((r) => r && r.statusCode && String(r.statusCode).toUpperCase().includes('ERROR')).length;
+    const sample = rows
+      .slice(0, 5)
+      .map((r) => {
+        const name = scrubSecrets(String(r?.spanName ?? r?.name ?? '')).slice(0, 80);
+        const svc = r?.serviceName ? ` @${scrubSecrets(String(r.serviceName)).slice(0, 40)}` : '';
+        const status = r?.statusCode != null ? ` [${String(r.statusCode).slice(0, 20)}]` : '';
+        return `${name}${svc}${status}`.trim();
+      })
+      .filter((line) => line.length > 0);
+    return {
+      kind: 'request_log',
+      externalId: 'tf_request_logs',
+      title: 'TrueFoundry AI Gateway — request logs (6h)',
+      summary: `${rows.length} gateway request span(s)${errors ? `, ${errors} error(s)` : ''}${sample[0] ? `; e.g. ${sample[0]}` : ''}`,
+      payload: { window_hours: 6, count: rows.length, errors, sample },
+      observedAt: null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseCommits(text: string): CommitFact[] {
@@ -267,6 +451,31 @@ export function createInvestigateStore(admin: Admin): InvestigateStore {
       });
     },
 
+    async saveTruefoundryEvidence({ ctx, incidentId, fact, now }) {
+      const subjectKey = fact.kind === 'model_metric' ? tfModelKey(incidentId) : fact.kind === 'mcp_metric' ? tfMcpKey(incidentId) : tfLogKey(incidentId);
+      // model/MCP metrics are `truefoundry_metric`; request logs are `truefoundry_log`.
+      const sourceType = fact.kind === 'request_log' ? 'truefoundry_log' : 'truefoundry_metric';
+      await insertEvidence({
+        workspace_id: ctx.workspaceId,
+        source_type: sourceType,
+        source_provider: 'truefoundry',
+        collected_by_job_id: ctx.jobId,
+        subject_type: 'incident',
+        subject_id: incidentId,
+        subject_key: subjectKey,
+        claim_type: 'fact',
+        external_id: fact.externalId.slice(0, 64),
+        uri: null,
+        title: clamp(fact.title, 200),
+        summary: clamp(fact.summary, 300),
+        payload: scrubDeep(fact.payload),
+        content_hash: `${incidentId}:${subjectKey}`,
+        verification_state: 'verified',
+        observed_at: fact.observedAt ?? now,
+        collected_at: now,
+      });
+    },
+
     async saveUnavailableTruefoundry({ ctx, incidentId, now }) {
       await insertEvidence({
         workspace_id: ctx.workspaceId,
@@ -280,8 +489,8 @@ export function createInvestigateStore(admin: Admin): InvestigateStore {
         external_id: `tf_unavailable:${incidentId}`,
         uri: null,
         title: 'TrueFoundry telemetry unavailable',
-        summary: 'TrueFoundry model/MCP telemetry was not reachable for this investigation.',
-        payload: { reason: 'observability_mcp_unreachable' },
+        summary: 'No TrueFoundry model/MCP telemetry was available for this investigation.',
+        payload: { reason: 'no_truefoundry_telemetry_available' },
         content_hash: `${incidentId}:${tfKey(incidentId)}`,
         // Degraded source: 'unavailable' keeps it out of the citable-fact set.
         verification_state: 'unavailable',
