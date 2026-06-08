@@ -632,15 +632,11 @@ function StepArtifactDrawer({
               Close
             </button>
             {m.url && (
-              <a className="btn btn-secondary" href={m.url} target="_blank" rel="noreferrer">
+              <a className="btn btn-primary" href={m.url} target="_blank" rel="noreferrer">
                 <Icon name="external" />
                 Open in Datadog
               </a>
             )}
-            <button type="button" className="btn btn-primary" onClick={() => onFire('create_datadog_monitor')}>
-              <Icon name="check" />
-              Publish monitor
-            </button>
           </>
         }
       >
@@ -656,8 +652,8 @@ function StepArtifactDrawer({
           </div>
         </div>
         <p className="pr-note">
-          A draft monitor has been created in Datadog for review. It does not notify anyone until you
-          publish it.
+          A draft monitor has been created in Datadog for review. It does not notify anyone until it is
+          published in Datadog.
         </p>
       </Drawer>
     );
