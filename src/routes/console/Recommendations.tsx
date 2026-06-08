@@ -100,6 +100,18 @@ export function Recommendations() {
 
   const recs = view.data ?? [];
 
+  // When a generation finishes while its progress slideout is open, advance the
+  // slideout straight to the produced artifact (PR / draft monitor) instead of
+  // leaving it on the success screen — no manual close + reopen.
+  useEffect(() => {
+    if (drawer?.kind !== 'progress') return;
+    const liveRec = recs.find((r) => r.id === drawer.rec.id);
+    const liveStep = liveRec?.steps?.find((s) => s.key === drawer.step.key);
+    if (!liveRec || !liveStep) return;
+    if (liveStep.generated_pr) setDrawer({ kind: 'pr', rec: liveRec, step: liveStep });
+    else if (liveStep.generated_monitor) setDrawer({ kind: 'monitor', rec: liveRec, step: liveStep });
+  }, [drawer, recs]);
+
   return (
     <div className="content narrow">
       <div className="page-head">
