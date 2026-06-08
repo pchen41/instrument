@@ -17,5 +17,5 @@ export interface Source {
 export const SOURCES: Source[] = [
   { id: 'datadog', name: 'Datadog', abbr: 'DD', color: '#632CA6', connected: true },
   { id: 'github', name: 'GitHub', abbr: 'GH', color: '#1B1F24', connected: true },
-  { id: 'truefoundry', name: 'TrueFoundry', abbr: 'TF', color: '#5B3DF5', connected: false },
+  { id: 'truefoundry', name: 'TrueFoundry', abbr: 'TF', color: '#5B3DF5', connected: true },
 ];
