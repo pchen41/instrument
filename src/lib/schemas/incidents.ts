@@ -35,6 +35,11 @@ export const incidentHypothesis = z
     root_cause_type: incidentRootCauseType.nullish(),
     confidence: confidenceLevel.nullish(),
     evidence_ids: z.array(uuid).nullish(),
+    // Whether Instrument could fix the cause itself (true only for a code defect),
+    // and the no-code-fix explanation + suggested next step when it cannot.
+    instrument_can_fix: z.boolean().nullish(),
+    no_fix_reason: z.string().nullish(),
+    suggested_next_step: z.string().nullish(),
   })
   .strict();
 export type IncidentHypothesis = z.infer<typeof incidentHypothesis>;

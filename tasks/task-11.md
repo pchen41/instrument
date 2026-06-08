@@ -2,7 +2,36 @@
 
 ## Status
 
-Not started.
+**Done + live-proven (2026-06-07).** The `incident_investigation` job runs a
+READ-ONLY, evidence-backed RCA: it gathers verified signals through the federated
+`instrument-investigation` MCP (github + datadog read tools, ZERO write tools),
+makes one schema-validated TrueFoundry model call to rank hypotheses, then resolves
+every cited evidence key to a verified `evidence_items` id before writing
+`incidents.hypotheses`. Reviewed by Gemini + Codex (Claude hung); HIGH/MED/LOW
+applied.
+
+- Files: `server/lib/agent-investigate.ts` (pure core + `incident_hypotheses.v1`
+  schema + executor), `server/functions/_shared/investigate-store.ts` (read-only
+  MCP adapter + PostgREST persistence), wired in `executors.ts`; the worker's
+  placeholder `finalizeIncident` is skipped for real investigations
+  (`server/lib/worker.ts`); the frontend hypothesis schema gained
+  `instrument_can_fix` / `no_fix_reason` / `suggested_next_step`
+  (`src/lib/schemas/incidents.ts`).
+- Live e2e (a console-sourced investigation on an active incident, 1 phase/tick to
+  prove cross-tick resume): triage → gather (8 commits via `list_commits_githuvn`)
+  → correlate (correlated_changes w/ GitHub URLs + evidence ids) → hypotheses
+  (model call valid against `incident_hypotheses.v1`) → summarize. The leading
+  hypothesis cited 8 verified evidence ids, confidence `low` (not over-claimed),
+  `instrument_can_fix=false` with a folded no-fix reason + suggested next step.
+- Graceful degradation proven: the TrueFoundry observability MCP is unreachable
+  from the worker (no `MCP_AUTH_TOKEN`), so its telemetry is recorded as
+  `unavailable` evidence and the Datadog/GitHub-backed investigation still
+  completes. Invalid model output falls back to a single low-confidence
+  "inconclusive" hypothesis (never a crash, never a fabricated cause).
+- The investigation is read-only by construction: the federated MCP has 0 write
+  tools and the adapter fails closed unless the server advertises a non-empty
+  read-only allowlist; the executor exposes no branch/PR/monitor/approval/job
+  creation path.
 
 ## Context
 
@@ -78,4 +107,36 @@ not be deferred past this investigation task.
 
 ## Progress Notes
 
-- Update this section with schema versions, MCP tools used, prompt files, and evidence collection limits.
+- **Schema:** model output validated against `incident_hypotheses.v1` (registered in
+  `server/lib/agent-investigate.ts`): `{summary, hypotheses:[{title, reasoning,
+  confidence(high|likely|low), root_cause_type(code|runtime_config|upstream|unknown),
+  instrument_can_fix, evidence_keys[], no_fix_reason?, suggested_next_step?}]}`.
+  Required array root (non-array → invalid); per-item lenient (drop the malformed
+  one, keep the batch). Request schema label `incident_investigation_request.v1`.
+- **MCP tools (read-only federated `instrument-investigation` server, suffixed
+  names):** `list_commits_githuvn` (recent commits / deploy candidates),
+  `get_datadog_trace_datade8` (when the alert carried a `trace_id`),
+  `search_datadog_logs_datade8` (service error logs). The adapter asserts each tool
+  is in the server's read allowlist and fails closed if the server isn't a
+  non-empty read-only registration.
+- **Model:** `agent_chat_completions` through the TrueFoundry gateway, gemini-3.5-flash,
+  `max_tokens 3000` (a reasoning model that emits a preamble before the JSON — a
+  tighter cap truncates it → invalid; this matches the Tasks 6/9 budget), gateway
+  temperature 0. Prompt instructs JSON-only, no preamble.
+- **Evidence:** gathered facts persisted as `evidence_items` (`commit`,
+  `datadog_trace`, `datadog_log`) verified; TrueFoundry recorded as a single
+  `unavailable` row. Hypotheses cite verified evidence only — selection resolves
+  each cited key against the exact key→id snapshot the model was shown (stored with
+  the output) and drops unresolvable/unverified citations. Caps: ≤8 commits, ≤20
+  facts in the prompt, ≤5 hypotheses, ≤8 evidence ids per hypothesis.
+- **Confidence/labels:** "Root cause" only when the leading hypothesis is `high`
+  (UI `rootTitle`); `high` is capped to `likely` when no verified evidence backs it.
+  A non-code or unfixable cause gets `instrument_can_fix=false` plus a no-code-fix
+  explanation + suggested next step folded into `detail`.
+- **Idempotency/resume:** evidence unique on `(collected_by_job_id, subject_key)`;
+  model call on `(job_id, purpose)`; the hypotheses phase short-circuits if its
+  output evidence already exists (no gateway re-bill). Each phase is independently
+  resumable across bounded-phase ticks.
+- **Worker gate:** real investigations (`trigger_summary.source` ∈ {console,
+  datadog_alert}) own their write-back; the 5A placeholder `finalizeIncident` only
+  runs for seeded/simulated jobs (and now uses a valid `finding` timeline kind).

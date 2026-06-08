@@ -1,4 +1,5 @@
 import type { PhaseExecutor } from './agent';
+import { isRealInvestigation } from './agent-investigate';
 import type { JobsDb } from './db';
 import { mergePhases, planFor } from './phases';
 import { classifyError, type ClassifiedError, decideAfterFailure, JobError, resolvePolicy } from './retry';
@@ -248,11 +249,11 @@ async function runJob(db: JobsDb, job: JobRow, opts: RunTickOptions): Promise<Ou
     failure_source: null,
   });
 
-  // Best-effort, post-success: make the completed investigation read coherently.
-  // 5A ships the durable engine, not real RCA (that lands with the TrueFoundry
-  // investigation task), so this only promotes the incident's seeded *tentative*
-  // leading hypothesis to a confirmed state — never fabricates a new cause.
-  if (job.job_type === 'incident_investigation' && job.target_type === 'incident') {
+  // Best-effort, post-success: make a SIMULATED/seeded investigation read
+  // coherently by promoting the incident's seeded *tentative* leading hypothesis —
+  // never fabricating a cause. A real Task 11 investigation owns its own write-back
+  // (evidence-backed, validated hypotheses), so skip the placeholder for those.
+  if (job.job_type === 'incident_investigation' && job.target_type === 'incident' && !isRealInvestigation(job)) {
     try {
       await finalizeIncident(db, job.target_id, opts);
     } catch {
@@ -277,9 +278,11 @@ async function finalizeIncident(db: JobsDb, incidentId: string, opts: RunTickOpt
       detail: tentative ? 'Confirmed as the leading cause from the correlated signals and recent changes.' : h.detail,
     };
   });
+  // Dedupe on title so a retried/repeat finalize doesn't stack the entry, and use
+  // a valid timeline kind ('analysis' is not in the incidentTimelineEntry enum).
   const timeline = [
-    ...(incident.timeline ?? []),
-    { at, kind: 'analysis', title: 'Investigation complete', detail: 'Instrument correlated the signals and confirmed the leading cause.' },
+    ...(incident.timeline ?? []).filter((t) => t.title !== 'Investigation complete'),
+    { at, kind: 'finding', title: 'Investigation complete', detail: 'Instrument correlated the signals and confirmed the leading cause.' },
   ];
   await db.updateIncident(incidentId, { hypotheses, timeline });
 }
