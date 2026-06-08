@@ -8,10 +8,12 @@ import { addSeconds, isoSeconds, LEASE_FREE, sleep, type Clock } from './time';
 import type { JobAttempt, JobAuditEvent, JobPhase, JobRow, SimulateConfig } from './types';
 
 // Worker time budget. The function cron tick claims a bounded batch and processes
-// each to a checkpoint well inside the function timeout. Engine phases are short
-// (provider work lands later); the lease (60s) covers any real latency and is how
-// an interrupted run is reclaimed by a later tick.
-export const LEASE_SECONDS = 60;
+// each to a checkpoint well inside the function timeout. The lease must outlast the
+// longest uninterrupted phase — a streaming gateway turn (GATEWAY_TIMEOUT_MS = 150s)
+// holds no heartbeat mid-stream — so it sits at 180s: comfortably above the gateway
+// budget and under the InsForge function budget (~201s). It's also how an
+// interrupted run is reclaimed by a later tick.
+export const LEASE_SECONDS = 180;
 const MAX_AUDIT_EVENTS = 50;
 const MAX_ATTEMPT_SUMMARIES = 20;
 

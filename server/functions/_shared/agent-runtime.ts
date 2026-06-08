@@ -28,10 +28,14 @@ type Admin = any;
 
 const GATEWAY_BASE = () => Deno.env.get('TRUEFOUNDRY_BASE_URL') ?? 'https://gateway.truefoundry.ai';
 const GATEWAY_MODEL = () => Deno.env.get('TRUEFOUNDRY_MODEL') ?? 'instrument/instrument';
-// Must stay comfortably under the worker lease (LEASE_SECONDS = 60s): a turn that
+// Must stay comfortably under the worker lease (LEASE_SECONDS = 180s): a turn that
 // outlived the lease could be reclaimed and re-run by another tick, so we abort
-// first and surface a retryable error instead.
-const GATEWAY_TIMEOUT_MS = 45_000;
+// first and surface a retryable error instead. PR-patch generation streams a full
+// file and routinely runs past 45s, so the budget is 150s. The lease is renewed at
+// the START of each phase (owned() runs right before the gateway call), so the
+// ordering gateway(150s) < lease(180s) < InsForge function budget (~201s) keeps a
+// long turn inside a single invocation with ~30s of slack before reclaim.
+const GATEWAY_TIMEOUT_MS = 150_000;
 
 /** Streaming TrueFoundry AI Gateway client (OpenAI-compatible /chat/completions). */
 export function createGateway(): AgentGateway {
