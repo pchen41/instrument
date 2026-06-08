@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { handleAction, type ActionContext } from './actions';
 import { FakeDb, fixedClock } from './fake-db';
+import { generationKey } from './idempotency';
 
 let db: FakeDb;
 let ctx: ActionContext;
@@ -166,6 +167,50 @@ describe('approval + generation enqueue', () => {
 
     const enq2 = await handleAction(db, ctx, { action: 'enqueue_generation', approval_id: approvalId });
     expect(enq2).toMatchObject({ job_id: enq.job_id, deduped: true });
+  });
+
+  it('resumes a terminally-failed generation instead of deduping to a dead job', async () => {
+    db.seedRecommendation({
+      id: 'rec-1',
+      workspace_id: 'ws-1',
+      state: 'active',
+      steps: [{ key: 'generate-pr', kind: 'code_pr', state: 'available' }],
+    });
+    const req = await handleAction(db, ctx, {
+      action: 'request_approval',
+      target_type: 'recommendation',
+      target_id: 'rec-1',
+      target_step_key: 'generate-pr',
+      action_type: 'generate_pr',
+      approval_summary: 'Open a PR',
+      payload,
+    });
+    const approvalId = req.approval_id as string;
+    await handleAction(db, ctx, { action: 'decide_approval', approval_id: approvalId, decision: 'approved', payload });
+
+    // A prior generation for this approval that already failed terminally.
+    const dead = db.seedJob({
+      workspace_id: 'ws-1',
+      job_type: 'recommendation_pr_generation',
+      target_type: 'recommendation',
+      target_id: 'rec-1',
+      target_step_key: 'generate-pr',
+      idempotency_key: generationKey(approvalId),
+      state: 'failed',
+      safe_to_retry: true,
+      attempt_count: 3,
+      max_attempts: 3,
+    });
+
+    const enq = await handleAction(db, ctx, { action: 'enqueue_generation', approval_id: approvalId });
+    // Same durable row, RESUMED — not deduped to the dead job, not a fresh one.
+    expect(enq).toMatchObject({ ok: true, job_id: dead.id, resumed: true });
+    const resumed = await db.getJob(dead.id);
+    expect(resumed?.state).toBe('queued');
+    expect(resumed?.max_attempts).toBe(6); // 3 spent + 3 fresh budget
+    // The step is flipped back to generating so the card reflects it.
+    const rec = await db.getRecommendation('rec-1');
+    expect(rec?.steps?.find((s) => s.key === 'generate-pr')?.state).toBe('generating');
   });
 
   it('rejects an approval whose payload changed (stale hash) and enqueue before approval', async () => {

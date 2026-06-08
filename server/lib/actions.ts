@@ -139,12 +139,20 @@ async function retryJob(db: JobsDb, ctx: ActionContext, jobId: string): Promise<
     throw new ActionError(409, 'not_retryable', 'This job is not in a safe, retryable failed state.');
   }
   const at = isoSeconds(ctx.clock.now());
-  // Add only the configured per-retry budget (not the already-inflated
-  // max_attempts), so repeated manual retries grow 3 → 6 → 9, never 3 → 6 → 12.
+  await requeueFailedJob(db, job, at, 'Manual retry requested by a workspace member.');
+  await markStepGenerating(db, job);
+  return { ok: true, job_id: jobId };
+}
+
+/**
+ * Re-queue a safely-failed job in place: the SAME durable row, preserved phases, a
+ * fresh attempt budget (the configured per-retry budget added on top of attempts
+ * already spent, so retries grow 3 → 6 → 9, never double), cleared error. Shared by
+ * manual retry and re-generation so neither duplicates the job or its provider writes.
+ */
+async function requeueFailedJob(db: JobsDb, job: JobRow, at: string, note: string): Promise<void> {
   const retryBudget = job.retry_policy?.max_attempts ?? DEFAULT_RETRY_POLICY.max_attempts;
-  // Reuse the same durable row (no duplicate, no duplicated provider writes):
-  // re-queue with a fresh attempt budget, preserved phases, cleared error.
-  await db.updateJob(jobId, {
+  await db.updateJob(job.id, {
     state: 'queued',
     next_run_at: at,
     queued_at: at,
@@ -155,13 +163,26 @@ async function retryJob(db: JobsDb, ctx: ActionContext, jobId: string): Promise<
     failure_source: null,
     completed_at: null,
     max_attempts: job.attempt_count + retryBudget,
-    audit_events: [
-      ...(job.audit_events ?? []),
-      { at, kind: 'manual_retry', summary: `Manual retry requested by a workspace member.` },
-    ],
+    audit_events: [...(job.audit_events ?? []), { at, kind: 'manual_retry', summary: note }],
     progress_version: job.progress_version + 1,
   });
-  return { ok: true, job_id: jobId };
+}
+
+/**
+ * Flip a recommendation step back to `generating` so the card reflects a (re)started
+ * generation immediately. The worker skips already-`succeeded` phases on resume, so
+ * the executor's own plan-phase step-set never re-runs on a retry — hence we set it
+ * here. No-op for non-recommendation jobs (e.g. incident investigations).
+ */
+async function markStepGenerating(
+  db: JobsDb,
+  t: { target_type: string; target_id?: string | null; target_step_key?: string | null },
+): Promise<void> {
+  if (t.target_type !== 'recommendation' || !t.target_id || !t.target_step_key) return;
+  const rec = await db.getRecommendation(t.target_id);
+  if (!rec?.steps) return;
+  const steps = rec.steps.map((s) => (s.key === t.target_step_key ? { ...s, state: 'generating' } : s));
+  await db.updateRecommendation(rec.id, { steps });
 }
 
 // ---- Recommendations --------------------------------------------------------
@@ -337,7 +358,20 @@ async function enqueueGeneration(db: JobsDb, ctx: ActionContext, approvalId: str
 
   const key = generationKey(approvalId);
   const dup = await db.findJobByIdempotency(approval.workspace_id, jobType, key);
-  if (dup) return { ok: true, job_id: dup.id, deduped: true };
+  if (dup) {
+    // A prior generation that terminally FAILED (e.g. a provider timeout) must
+    // RESUME on a fresh Generate/Retry — not dedupe to an inert dead job the user
+    // can never restart from the card. Reuse the durable row (preserved phases,
+    // fresh budget, no duplicate provider writes) and flip the step back to
+    // `generating` so the card shows progress again.
+    if (canRetryJob(dup)) {
+      const at = isoSeconds(ctx.clock.now());
+      await requeueFailedJob(db, dup, at, 'Re-generation requested by a workspace member.');
+      await markStepGenerating(db, approval);
+      return { ok: true, job_id: dup.id, resumed: true };
+    }
+    return { ok: true, job_id: dup.id, deduped: true };
+  }
 
   const job = await db.insertJob(
     newJob(ctx, {
