@@ -168,7 +168,10 @@ async function composePatch(deps: PrGenDeps, ctx: PrGenJobContext, jobId: string
       request: {
         apiSurface: 'agent_chat_completions',
         messages: buildPatchMessages({ repoFullName: p.repo.fullName, recommendationTitle: p.recommendationTitle, recommendationRationale: p.recommendationRationale, proposedNextStep: p.proposedNextStep, filePath: baseline.path, currentContent: baseline.content }),
-        maxTokens: 4000,
+        // The patch returns the FULL modified file content, so the budget must fit
+        // a whole source file (a few hundred lines) plus the PR copy — 4000 was too
+        // small for larger files and truncated the JSON into an invalid patch.
+        maxTokens: 8000,
       },
       requestSchemaVersion: 'pr_gen_request.v1',
       outputSchemaVersion: PR_GEN_SCHEMA_VERSION,
@@ -179,7 +182,14 @@ async function composePatch(deps: PrGenDeps, ctx: PrGenJobContext, jobId: string
     },
   );
   const patch = outcome.validation.status === 'valid' ? ((outcome.validation.value as PrGenPatch | undefined) ?? null) : null;
-  await deps.store.savePatch(jobId, ctx.workspaceId, ctx.recommendationId, outcome.modelCallId, outcome.validation.status, patch, now().toISOString());
+  if (!patch) {
+    // Do NOT persist a truncated/invalid patch — the resume guard above would then
+    // reuse it on every retry and fail handoff forever (job "succeeds" with a dead
+    // step). Throw retryable so the next attempt regenerates with a fresh gateway
+    // turn; a large file can need a second try to come back valid within budget.
+    throw new JobError({ retryable: true, code: 'prgen_invalid_patch', summary: 'The generated patch did not validate; regenerating.', source: 'truefoundry' });
+  }
+  await deps.store.savePatch(jobId, ctx.workspaceId, ctx.recommendationId, outcome.modelCallId, 'valid', patch, now().toISOString());
 }
 
 async function handoff(deps: PrGenDeps, ctx: PrGenJobContext, jobId: string, now: () => Date): Promise<void> {
