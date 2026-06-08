@@ -113,7 +113,7 @@ function parseFileContents(res: { text: string; raw: any }): FileRead | null {
   return { content: text, sha };
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function parsePr(text: string): CreatedPr | null {
+export function parsePr(text: string): CreatedPr | null { 
   try {
     const j = JSON.parse(text);
     const url = (j.html_url ?? j.url ?? j?.pull_request?.html_url ?? '') as string;
@@ -124,11 +124,18 @@ export function parsePr(text: string): CreatedPr | null {
     let n = j?.number ?? j?.pull_request?.number;
     if (n == null && url) {
       const m = /\/pull\/(\d+)/.exec(url);
-      if (m) n = Number(m[1]);
+      if (m) {
+        n = Number(m[1]);
+        console.warn(`parsePr: Explicit PR number missing, fell back to URL regex parsing. URL: ${url}`);
+      }
     }
-    if (n == null) return null;
+    if (n == null) {
+      console.error(`parsePr: Failed to extract PR number from payload. URL: ${url}, Payload: ${text}`);
+      return null;
+    }
     return { number: Number(n), url, nodeId: (j.node_id ?? null) as string | null };
-  } catch {
+  } catch (err) {
+    console.error(`parsePr: Failed to parse PR JSON payload. Error: ${err instanceof Error ? err.message : err}, Payload: ${text}`);
     return null;
   }
 }
@@ -205,7 +212,7 @@ export function createPrGenStore(admin: Admin): PrGenStore {
       if (!repo) return null;
       const filePath = String(rec.affected_code_path ?? '').split(':')[0];
       if (!filePath) return null;
-      return {
+      return { 
         approvalState: approval.state as string,
         approvedPayloadHash: (approval.approved_payload_hash as string) ?? '',
         repo: { owner: repo.github_owner as string, name: repo.github_name as string, fullName: `${repo.github_owner}/${repo.github_name}`, defaultBranch: (repo.default_branch as string) ?? 'main' },
