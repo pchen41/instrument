@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { insforge } from '../lib/insforge';
 import {
+  getGenerationJob,
   getIncidentDetail,
   getWorkspaceSettings,
   isActiveJobState,
@@ -182,6 +183,18 @@ export function useRecommendationsView(scope: 'active' | 'archive', client: Clie
     [scope, client],
   );
   return usePolling<RecommendationCard[]>(loader, { isActive: ALWAYS_ACTIVE, resetKey: scope });
+}
+
+/** A recommendation step's generation job (PR or draft monitor); polls while in flight. */
+export function useGenerationJob(recommendationId: string, stepKey: string, client: Client = insforge) {
+  const loader = useCallback(() => getGenerationJob(recommendationId, stepKey, client), [recommendationId, stepKey, client]);
+  return usePolling<JobSummary | null>(loader, {
+    // Keep polling while the job row hasn't been read yet (null) — it's created
+    // server-side a beat after the step flips to `generating`, so stopping on null
+    // would freeze the drawer on "Starting…". Stop only on a terminal job state.
+    isActive: (job) => !job || isActiveJobState(job.state),
+    resetKey: `${recommendationId}:${stepKey}`,
+  });
 }
 
 /** Integration health. Loaded once and refetched on focus; not polled. */

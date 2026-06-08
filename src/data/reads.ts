@@ -212,6 +212,29 @@ export async function getJobsByIds(
   return { data: (res.data as unknown as JobSummary[]) ?? [], error: res.error };
 }
 
+/**
+ * The latest generation job for a recommendation step (PR generation or draft
+ * monitor creation) — drives the live "Generating…" progress drawer. Keyed by the
+ * step's (target_id, target_step_key); newest first so a re-run supersedes an
+ * earlier attempt.
+ */
+export async function getGenerationJob(
+  recommendationId: string,
+  stepKey: string,
+  client: Client = insforge,
+): Promise<{ data: JobSummary | null; error: unknown }> {
+  const res = await client.database
+    .from('jobs')
+    .select(JOB_SUMMARY_COLUMNS)
+    .eq('target_type', 'recommendation')
+    .eq('target_id', recommendationId)
+    .eq('target_step_key', stepKey)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return { data: (res.data as unknown as JobSummary | null) ?? null, error: res.error };
+}
+
 /** An incident row paired with its investigation job and the derived display state. */
 export interface IncidentWithState {
   incident: IncidentListItem;

@@ -48,6 +48,16 @@ export function retryInvestigation(jobId: string): Promise<ActionOutcome> {
   return invoke({ action: 'retry_job', job_id: jobId });
 }
 
+/**
+ * Retry a safely-failed generation job (PR or draft monitor). Reuses the same
+ * durable job via `retry_job` — preserved phases, fresh attempt budget, no
+ * duplicate provider writes. NOT a re-`approveAndGenerate`, which would dedupe
+ * straight back to the failed job and do nothing.
+ */
+export function retryGeneration(jobId: string): Promise<ActionOutcome> {
+  return invoke({ action: 'retry_job', job_id: jobId });
+}
+
 /** Dismiss (active → dismissed) or restore (dismissed → active) a recommendation. */
 export function setRecommendationState(
   recommendationId: string,

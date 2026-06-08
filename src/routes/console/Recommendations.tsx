@@ -3,7 +3,8 @@ import { Icon } from '../../components/Icon';
 import { Segmented } from '../../components/console/Segmented';
 import { ConfirmDialog, Drawer } from '../../components/console/overlays';
 import { ErrorState, LoadingState, Toast, useTransientNotice } from '../../components/console/feedback';
-import { useRecommendationsView } from '../../data/hooks';
+import { GenProgress } from '../../components/console/GenProgress';
+import { useGenerationJob, useRecommendationsView } from '../../data/hooks';
 import {
   getPrReviewRecord,
   type PrReviewComment,
@@ -12,7 +13,7 @@ import {
   type RecommendationDetail,
 } from '../../data/reads';
 import { runDeferredAction, type DeferredAction } from '../../data/deferred';
-import { approveAndGenerate, setRecommendationState } from '../../data/actions';
+import { approveAndGenerate, retryGeneration, setRecommendationState } from '../../data/actions';
 import type { RecommendationStep } from '../../lib/schemas';
 
 // Card glyph + label driven by the recommendation's category so it reads
@@ -31,6 +32,7 @@ const ARCH_BADGE: Record<string, { order: number; icon: string; label: string }>
 
 type DrawerState =
   | { kind: 'pr' | 'monitor' | 'change'; rec: RecommendationCard; step: RecommendationStep }
+  | { kind: 'progress'; rec: RecommendationCard; step: RecommendationStep }
   | { kind: 'review'; rec: RecommendationCard };
 
 /**
@@ -151,7 +153,10 @@ export function Recommendations() {
       {drawer?.kind === 'review' && (
         <ReviewDrawer recommendationId={drawer.rec.id} onClose={() => setDrawer(null)} />
       )}
-      {drawer && drawer.kind !== 'review' && (
+      {drawer?.kind === 'progress' && (
+        <GenProgressDrawer rec={drawer.rec} step={drawer.step} onClose={() => setDrawer(null)} notify={notice.show} />
+      )}
+      {drawer && drawer.kind !== 'review' && drawer.kind !== 'progress' && (
         <StepArtifactDrawer state={drawer} onClose={() => setDrawer(null)} onFire={fire} />
       )}
 
@@ -443,10 +448,14 @@ function StepAction({
   }
 
   if (step.state === 'generating') {
+    // Stays clickable while running: opens a live progress slideout (phases +
+    // retry/error notes) rather than a dead spinner — matches the design intent.
+    const genLabel = step.kind === 'datadog_new_monitor' ? 'Generating monitor' : 'Generating PR';
     return (
-      <button type="button" className="btn btn-secondary btn-sm gen-live" disabled>
+      <button type="button" className="btn btn-secondary btn-sm gen-live" onClick={() => onOpen({ kind: 'progress', rec, step })}>
         <span className="gen-dot pulse" />
-        Generating
+        {genLabel}
+        <Icon name="arrow-right" className="affordance" />
       </button>
     );
   }
@@ -533,12 +542,106 @@ function StepAction({
 
 // ---- Drawers ----------------------------------------------------------------
 
+/**
+ * Live generation progress slideout (Task: clickable "Generating…"). Polls the
+ * step's generation job and renders the durable `phases` checklist with honest
+ * retry/error notes — so starting a PR or draft monitor never leaves a dead
+ * spinner. On terminal failure it offers a one-click retry of the generation.
+ */
+function GenProgressDrawer({
+  rec,
+  step,
+  onClose,
+  notify,
+}: {
+  rec: RecommendationCard;
+  step: RecommendationStep;
+  onClose: () => void;
+  notify: (message: string) => void;
+}) {
+  const job = useGenerationJob(rec.id, step.key);
+  const [submitting, setSubmitting] = useState(false);
+  const isMonitor = step.kind === 'datadog_new_monitor';
+  const j = job.data;
+  const phases = j?.phases ?? [];
+  const failed = j?.state === 'failed';
+  const succeeded = j?.state === 'succeeded';
+  const jobRetrying = j?.state === 'retrying';
+  // Surface the retry/failure reason in plain language beneath the checklist.
+  const note = j?.error_summary ?? (jobRetrying ? 'A dependency was slow — Instrument is retrying.' : null);
+  // Retry reuses the SAME durable job (retry_job): preserved phases, fresh budget,
+  // no duplicate writes. Re-running approveAndGenerate would dedupe to the failed
+  // job and do nothing, so we never go back through the approval flow here.
+  const onRetry = async () => {
+    if (!j || submitting) return;
+    setSubmitting(true);
+    const res = await retryGeneration(j.id);
+    setSubmitting(false);
+    if (res.ok) await job.refetch();
+    else notify(res.error ?? 'The generation could not be retried.');
+  };
+  return (
+    <Drawer
+      icon={isMonitor ? 'bell' : 'pr'}
+      title={isMonitor ? 'Generating draft monitor' : 'Generating pull request'}
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" style={{ marginRight: 'auto' }} onClick={onClose}>
+            Close
+          </button>
+          {failed ? (
+            <button type="button" className="btn btn-primary" onClick={onRetry} disabled={submitting}>
+              {submitting ? (
+                <>
+                  <span className="btn-spin" />
+                  Retrying…
+                </>
+              ) : (
+                <>
+                  <Icon name="undo" />
+                  Retry generation
+                </>
+              )}
+            </button>
+          ) : succeeded ? (
+            <button type="button" className="btn btn-primary" onClick={onClose}>
+              <Icon name="check" />
+              Done
+            </button>
+          ) : (
+            <button type="button" className="btn btn-secondary" disabled>
+              <span className="gen-dot pulse" />
+              Working…
+            </button>
+          )}
+        </>
+      }
+    >
+      <h2 style={{ font: 'var(--h3)', margin: '0 0 6px' }}>{step.label}</h2>
+      <p className="pr-note">
+        {succeeded
+          ? `This ${isMonitor ? 'draft monitor' : 'pull request'} is ready — close to view it on the recommendation.`
+          : `Instrument is drafting this ${isMonitor ? 'draft monitor' : 'pull request'}. It will appear here for review — nothing is ${
+              isMonitor ? 'published' : 'merged'
+            } without your approval.`}
+      </p>
+      <div className="section-label">Progress</div>
+      {phases.length === 0 ? (
+        <p className="pr-note">{job.loading ? 'Loading progress…' : 'Starting…'}</p>
+      ) : (
+        <GenProgress phases={phases} note={note} />
+      )}
+    </Drawer>
+  );
+}
+
 function StepArtifactDrawer({
   state,
   onClose,
   onFire,
 }: {
-  state: Exclude<DrawerState, { kind: 'review' }>;
+  state: Exclude<DrawerState, { kind: 'review' | 'progress' }>;
   onClose: () => void;
   onFire: (a: DeferredAction) => void;
 }) {
